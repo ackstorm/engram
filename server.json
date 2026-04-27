@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.tstockham96/engram",
+  "description": "Intelligent agent memory with automatic extraction, consolidation, and bi-temporal recall.",
+  "repository": {
+    "url": "https://github.com/tstockham96/engram",
+    "source": "github"
+  },
+  "version": "0.6.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "engram-sdk",
+      "version": "0.6.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Google Gemini API key for embeddings and LLM operations",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true,
+          "name": "GEMINI_API_KEY"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.gitignore
+eval-scale-data
+*.test.ts
+*.md
+.env*
+.DS_Store
