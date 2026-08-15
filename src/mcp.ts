@@ -33,8 +33,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createServer as createHttpServer } from 'node:http';
 import { z } from 'zod';
 import { Vault } from './vault.js';
-import { GeminiEmbeddings, OpenAIEmbeddings } from './embeddings.js';
-import type { EmbeddingProvider } from './embeddings.js';
+import { createEmbedder } from './embeddings.js';
 import type { VaultConfig, Memory } from './types.js';
 import path from 'path';
 import { homedir } from 'os';
@@ -78,12 +77,7 @@ const vaultConfig: VaultConfig = {
   } : {}),
 };
 
-let embedder: EmbeddingProvider | undefined;
-if (geminiKey) {
-  embedder = new GeminiEmbeddings(geminiKey);
-} else if (openaiKey) {
-  embedder = new OpenAIEmbeddings(openaiKey);
-}
+const embedder = createEmbedder({ apiKey: llmKey });
 
 const vault = new Vault(vaultConfig, embedder);
 

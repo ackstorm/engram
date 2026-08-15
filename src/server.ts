@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { Vault } from './vault.js';
-import { OpenAIEmbeddings, GeminiEmbeddings } from './embeddings.js';
+import { createEmbedder } from './embeddings.js';
 import type { EmbeddingProvider } from './embeddings.js';
 import type { VaultConfig } from './types.js';
 import { checkForUpdates, getVersion } from './update-check.js';
 import { createServer } from 'node:http';
 import path from 'path';
 import os from 'os';
-import { geminiEndpoint, resolveLlmModel, resolveEmbeddingModel } from './config.js';
+import { geminiEndpoint, resolveLlmModel } from './config.js';
 import { resolveCorsOrigin, corsAllowlist, requireAuthToken, checkBearerToken } from './config.js';
 
 // ============================================================
@@ -34,11 +34,12 @@ function getOrCreateVault(config: VaultConfig): Vault {
   if (!vault) {
     let embedder: EmbeddingProvider | undefined;
     if (config.llm) {
-      if (config.llm.provider === 'gemini') {
-        embedder = new GeminiEmbeddings(config.llm.apiKey, resolveEmbeddingModel(config.llm.embeddingModel));
-      } else {
-        embedder = new OpenAIEmbeddings(config.llm.apiKey, config.llm.embeddingModel ?? 'text-embedding-3-small');
-      }
+      embedder = createEmbedder({
+        provider: config.llm.provider === 'gemini' ? 'gemini' : 'openai',
+        apiKey: config.llm.apiKey,
+        model: config.llm.embeddingModel,
+        baseUrl: config.llm.baseUrl,
+      });
     }
     vault = new Vault(config, embedder);
     vaultCache.set(key, vault);

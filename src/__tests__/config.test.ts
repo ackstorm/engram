@@ -100,17 +100,17 @@ describe('resolveLlmModel', () => {
 });
 
 describe('resolveEmbeddingModel', () => {
-  it('keeps a default because the vector dimension is baked into the schema', () => {
-    expect(resolveEmbeddingModel()).toBe('gemini-embedding-001');
+  it('keeps a per-provider default because the dimension is baked into the schema', () => {
+    expect(resolveEmbeddingModel('gemini')).toBe('gemini-embedding-001');
   });
 
   it('honours ENGRAM_EMBEDDING_MODEL', () => {
     process.env.ENGRAM_EMBEDDING_MODEL = 'gemini-embedding-002';
-    expect(resolveEmbeddingModel()).toBe('gemini-embedding-002');
+    expect(resolveEmbeddingModel('gemini')).toBe('gemini-embedding-002');
   });
 
   it('prefers an explicit argument', () => {
-    expect(resolveEmbeddingModel('explicit')).toBe('explicit');
+    expect(resolveEmbeddingModel('gemini', 'explicit')).toBe('explicit');
   });
 });
 

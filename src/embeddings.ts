@@ -2,7 +2,14 @@
 // Embedding Provider — Pluggable embedding generation
 // ============================================================
 
-import { geminiEndpoint, resolveEmbeddingModel } from './config.js';
+import {
+  geminiEndpoint,
+  resolveEmbeddingModel,
+  resolveEmbeddingDims,
+  resolveModelProvider,
+  openaiBaseUrl,
+  type ModelProvider,
+} from './config.js';
 
 // ============================================================
 // Retry helper for rate-limited API calls
@@ -56,11 +63,16 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
   private apiKey: string;
   private model: string;
   private dims: number;
+  private baseUrl: string;
+  /** Only sent when the caller explicitly chose a dimension. */
+  private explicitDims: boolean;
 
-  constructor(apiKey: string, model: string = 'text-embedding-3-small', dims: number = 1536) {
+  constructor(apiKey: string, model?: string, dims?: number, baseUrl?: string) {
     this.apiKey = apiKey;
-    this.model = model;
-    this.dims = dims;
+    this.model = resolveEmbeddingModel('openai', model);
+    this.explicitDims = dims !== undefined || !!process.env.ENGRAM_EMBEDDING_DIMS?.trim();
+    this.dims = resolveEmbeddingDims('openai', dims);
+    this.baseUrl = baseUrl?.replace(/\/+$/, '') ?? openaiBaseUrl();
   }
 
   async embed(text: string): Promise<number[]> {
@@ -69,30 +81,36 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    const response = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.model,
-        input: texts,
-      }),
-    });
+    return withRetry(async () => {
+      const response = await fetch(`${this.baseUrl}/v1/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          input: texts,
+          // Many OpenAI-compatible gateways reject an unknown `dimensions`
+          // field, so only send it when it was actually asked for.
+          ...(this.explicitDims ? { dimensions: this.dims } : {}),
+        }),
+      });
 
-    if (!response.ok) {
-      throw new Error(`OpenAI Embeddings API error: ${response.status} ${response.statusText}`);
-    }
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`OpenAI-compatible Embeddings API error: ${response.status} ${err}`);
+      }
 
-    const data = await response.json() as {
-      data: Array<{ embedding: number[]; index: number }>;
-    };
+      const data = await response.json() as {
+        data: Array<{ embedding: number[]; index?: number }>;
+      };
 
-    // Sort by index to preserve order
-    return data.data
-      .sort((a, b) => a.index - b.index)
-      .map(d => d.embedding);
+      // Sort by index to preserve order
+      return data.data
+        .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+        .map(d => d.embedding);
+    }, { label: `OpenAI-compatible embedContent (${this.baseUrl})` });
   }
 
   dimensions(): number {
@@ -109,10 +127,10 @@ export class GeminiEmbeddings implements EmbeddingProvider {
   private model: string;
   private dims: number;
 
-  constructor(apiKey: string, model?: string, dims: number = 3072) {
+  constructor(apiKey: string, model?: string, dims?: number) {
     this.apiKey = apiKey;
-    this.model = resolveEmbeddingModel(model);
-    this.dims = dims;
+    this.model = resolveEmbeddingModel('gemini', model);
+    this.dims = resolveEmbeddingDims('gemini', dims);
   }
 
   async embed(text: string): Promise<number[]> {
@@ -228,4 +246,39 @@ export class LocalEmbeddings implements EmbeddingProvider {
       .split(/\s+/)
       .filter(w => w.length > 1);
   }
+}
+
+// ============================================================
+// Factory — the single place an embedder is chosen
+// ============================================================
+
+/**
+ * Build the configured embedder, or undefined when the selected provider has
+ * no API key (the vault then falls back to keyword search).
+ *
+ * Replaces the key-sniffing that was duplicated in mcp.ts and server.ts.
+ */
+export function createEmbedder(opts?: {
+  provider?: string;
+  apiKey?: string;
+  model?: string;
+  dims?: number;
+  baseUrl?: string;
+}): EmbeddingProvider | undefined {
+  let provider: ModelProvider;
+  try {
+    provider = resolveModelProvider(opts?.provider);
+  } catch {
+    return undefined; // nothing configured — keyword-only mode
+  }
+
+  if (provider === 'gemini') {
+    const key = opts?.apiKey ?? process.env.GEMINI_API_KEY;
+    if (!key?.trim()) return undefined;
+    return new GeminiEmbeddings(key, opts?.model, opts?.dims);
+  }
+
+  const key = opts?.apiKey ?? process.env.OPENAI_API_KEY;
+  if (!key?.trim()) return undefined;
+  return new OpenAIEmbeddings(key, opts?.model, opts?.dims, opts?.baseUrl);
 }
