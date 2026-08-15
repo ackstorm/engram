@@ -14,8 +14,10 @@ export class MemoryStore {
   private db: DatabaseSync;
   private vecEnabled: boolean = false;
   private embeddingDimensions: number = 0;
+  private dbPath: string;
 
   constructor(dbPath: string, embeddingDimensions?: number) {
+    this.dbPath = dbPath;
     // Auto-create parent directory if it doesn't exist
     mkdirSync(dirname(dbPath), { recursive: true });
     const needsExtensions = !!(embeddingDimensions && embeddingDimensions > 0);
@@ -98,6 +100,11 @@ export class MemoryStore {
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
+      CREATE TABLE IF NOT EXISTS engram_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS entities (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -149,6 +156,29 @@ export class MemoryStore {
 
     // Create vector virtual table if sqlite-vec is loaded
     if (this.vecEnabled && this.embeddingDimensions > 0) {
+      // A vault's embedding dimension is baked into vec_memories. CREATE VIRTUAL
+      // TABLE IF NOT EXISTS would silently keep the old width on a provider
+      // switch, so check it explicitly instead.
+      const row = this.db
+        .prepare(`SELECT value FROM engram_meta WHERE key = 'embedding_dims'`)
+        .get() as { value: string } | undefined;
+
+      if (row && Number(row.value) !== this.embeddingDimensions) {
+        throw new Error(
+          `[engram] Vault at ${this.dbPath} was built with ${row.value}-dimension embeddings ` +
+          `but the current configuration produces ${this.embeddingDimensions}. ` +
+          'Changing embedding model or MODEL_PROVIDER invalidates every stored vector. ' +
+          'Either restore the previous embedding settings, or start a new vault ' +
+          '(ENGRAM_DB_PATH) and re-import.',
+        );
+      }
+
+      if (!row) {
+        this.db
+          .prepare(`INSERT INTO engram_meta (key, value) VALUES ('embedding_dims', ?)`)
+          .run(String(this.embeddingDimensions));
+      }
+
       this.db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
           memory_id TEXT PRIMARY KEY,
@@ -156,6 +186,11 @@ export class MemoryStore {
         );
       `);
     }
+  }
+
+  /** Embedding dimension this vault was built with; 0 when it has no vectors. */
+  embeddingDims(): number {
+    return this.embeddingDimensions;
   }
 
   // --------------------------------------------------------
