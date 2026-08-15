@@ -8,6 +8,12 @@
 
 Engram gives AI agents knowledge graphs, consolidation, and spreading activation. Not storage. Understanding.
 
+> **Fork notice (ackstorm/engram).** This fork changes three defaults for safety:
+> `ENGRAM_AUTH_TOKEN` is now required by every HTTP listener; `ENGRAM_LLM_MODEL`
+> has no default and must be set; and `engram-mcp --http` binds `127.0.0.1`
+> instead of `0.0.0.0` with `Access-Control-Allow-Origin: *`.
+> See [docs/configuration.md](docs/configuration.md).
+
 ---
 
 ## Quick Start
@@ -354,17 +360,12 @@ export ENGRAM_DB_PATH=/path/to/engram.db
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GEMINI_API_KEY` | Gemini API key for embeddings & consolidation | — |
-| `ENGRAM_LLM_PROVIDER` | LLM provider: `gemini`, `openai`, `anthropic` | `gemini` |
-| `ENGRAM_LLM_API_KEY` | LLM API key (falls back to `GEMINI_API_KEY` for gemini) | — |
-| `ENGRAM_LLM_MODEL` | LLM model name | provider default |
-| `ENGRAM_LLM_BASE_URL` | Custom API base URL (Groq, Cerebras, Ollama, etc.) | provider default |
-| `ENGRAM_DB_PATH` | SQLite database path | `~/.engram/default.db` |
-| `ENGRAM_OWNER` | Vault owner name | `default` |
-| `ENGRAM_HOST` | Server bind address | `127.0.0.1` |
-| `ENGRAM_PORT` | Server port | `3800` |
-| `ENGRAM_AUTH_TOKEN` | Bearer token for API auth | — |
-| `ENGRAM_CORS_ORIGIN` | CORS allowed origin | localhost only |
+| `ENGRAM_AUTH_TOKEN` | Bearer token — **required** for all HTTP listeners | — |
+| `ENGRAM_LLM_MODEL` | LLM model — **required**, no default | — |
+| `GOOGLE_GEMINI_BASE_URL` | Gemini API base URL | `https://generativelanguage.googleapis.com` |
+| `ENGRAM_CORS_ORIGIN` | Comma-separated exact origins | empty (CORS off) |
+
+Full list: [docs/configuration.md](docs/configuration.md).
 
 ---
 
