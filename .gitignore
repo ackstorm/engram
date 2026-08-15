@@ -19,3 +19,4 @@ hackernews-post.md
 signal-quality-plan.md
 .mcpregistry_*
 .env*
+!.env.example

@@ -1,0 +1,51 @@
+# ============================================================
+# Engram MCP server (HTTP transport)
+# ============================================================
+# Copy .env.example to .env and fill it in, then: docker compose up -d
+
+services:
+  engram:
+    build: .
+    image: ackstorm/engram:local
+    restart: unless-stopped
+
+    environment:
+      # --- Transport -----------------------------------------
+      ENGRAM_MCP_HOST: 0.0.0.0          # inside the container only
+      ENGRAM_MCP_PORT: 3801
+      ENGRAM_AUTH_TOKEN: ${ENGRAM_AUTH_TOKEN:?set ENGRAM_AUTH_TOKEN in .env}
+
+      # --- LLM ------------------------------------------------
+      # There is no built-in default model; it is pinned here on purpose.
+      ENGRAM_LLM_PROVIDER: gemini
+      ENGRAM_LLM_MODEL: gemini-flash-latest
+      ENGRAM_LLM_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GOOGLE_GEMINI_BASE_URL: ${GOOGLE_GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}
+
+      # --- Access ---------------------------------------------
+      ENGRAM_CORS_ORIGIN: ${ENGRAM_CORS_ORIGIN:-}
+
+      # --- Storage --------------------------------------------
+      ENGRAM_DB_PATH: /data/engram.db
+
+    # Published on loopback only. Change deliberately, and keep the token.
+    ports:
+      - "127.0.0.1:${ENGRAM_HOST_PORT:-3801}:3801"
+
+    volumes:
+      - engram-data:/data
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3801/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  engram-data:
