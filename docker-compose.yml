@@ -15,6 +15,15 @@ services:
       ENGRAM_MCP_PORT: 3801
       ENGRAM_AUTH_TOKEN: ${ENGRAM_AUTH_TOKEN:?set ENGRAM_AUTH_TOKEN in .env}
 
+      # --- Embeddings ----------------------------------------
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-gemini}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # ENGRAM_EMBEDDING_MODEL / ENGRAM_EMBEDDING_DIMS: set both together, and
+      # only on a fresh vault — the dimension is baked into the database.
+      ENGRAM_EMBEDDING_MODEL: ${ENGRAM_EMBEDDING_MODEL:-}
+      ENGRAM_EMBEDDING_DIMS: ${ENGRAM_EMBEDDING_DIMS:-}
+
       # --- LLM ------------------------------------------------
       # There is no built-in default model; it is pinned here on purpose.
       ENGRAM_LLM_PROVIDER: gemini
