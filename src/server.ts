@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import path from 'path';
 import os from 'os';
 import { geminiEndpoint, resolveLlmModel, resolveEmbeddingModel } from './config.js';
+import { resolveCorsOrigin, corsAllowlist, requireAuthToken, checkBearerToken } from './config.js';
 
 // ============================================================
 // Engram REST API Server
@@ -16,6 +17,8 @@ import { geminiEndpoint, resolveLlmModel, resolveEmbeddingModel } from './config
 interface ServerConfig {
   port?: number;
   host?: string;
+  /** Bearer token required on every request except /health. Mandatory. */
+  authToken: string;
   /** Map of API key → vault config. Each key gets its own vault. */
   vaults: Record<string, VaultConfig>;
   /** Default vault config for single-tenant mode */
@@ -598,24 +601,22 @@ export function createEngramServer(config: ServerConfig) {
   const preferredPort = config.port ?? 3800;
   const host = config.host ?? '127.0.0.1';
 
-  // Optional auth token for single-tenant mode (set ENGRAM_AUTH_TOKEN to enable)
-  const authToken = process.env.ENGRAM_AUTH_TOKEN;
+  // Bearer token is mandatory for every HTTP listener — no loopback exemption.
+  const authToken = config.authToken;
+  if (!authToken) {
+    throw new Error('[engram] createEngramServer requires a non-empty authToken.');
+  }
 
   function resolveVault(req: import('node:http').IncomingMessage): Vault | null {
-    // Single-tenant mode
+    const authHeader = req.headers.authorization;
+
+    // Single-tenant mode: one shared vault behind the server token.
     if (config.defaultVault) {
-      // If auth token is set, enforce it
-      if (authToken) {
-        const authHeader = req.headers.authorization;
-        if (!authHeader?.startsWith('Bearer ') || authHeader.slice(7) !== authToken) {
-          return null;
-        }
-      }
+      if (!checkBearerToken(authHeader, authToken)) return null;
       return getOrCreateVault(config.defaultVault);
     }
 
-    // Multi-tenant: resolve from Authorization header
-    const authHeader = req.headers.authorization;
+    // Multi-tenant: the bearer value selects the vault.
     if (!authHeader?.startsWith('Bearer ')) return null;
     const apiKey = authHeader.slice(7);
     const vaultConfig = config.vaults[apiKey];
@@ -624,11 +625,13 @@ export function createEngramServer(config: ServerConfig) {
   }
 
   const server = createServer(async (req, res) => {
-    // CORS — restrict to localhost by default, configurable via ENGRAM_CORS_ORIGIN
-    const allowedOrigin = process.env.ENGRAM_CORS_ORIGIN ?? 'http://localhost:*';
+    // CORS — exact-origin allowlist from ENGRAM_CORS_ORIGIN. Empty by default,
+    // which means no ACAO header at all and browsers cannot read responses.
     const requestOrigin = req.headers.origin ?? '';
-    if (allowedOrigin === '*' || requestOrigin.startsWith('http://localhost') || requestOrigin.startsWith('http://127.0.0.1')) {
-      res.setHeader('Access-Control-Allow-Origin', requestOrigin || 'http://localhost');
+    const allowedOrigin = resolveCorsOrigin(requestOrigin, corsAllowlist());
+    if (allowedOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+      res.setHeader('Vary', 'Origin');
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -719,8 +722,8 @@ Environment Variables:
   ENGRAM_HOST          Bind address (default: 127.0.0.1)
   ENGRAM_OWNER         Vault owner name (default: "default")
   ENGRAM_DB_PATH       SQLite database path (default: engram-<owner>.db)
-  ENGRAM_AUTH_TOKEN    Optional Bearer token for API authentication
-  ENGRAM_CORS_ORIGIN   CORS allowed origin (default: localhost only)
+  ENGRAM_AUTH_TOKEN    REQUIRED. Bearer token for API authentication
+  ENGRAM_CORS_ORIGIN   Comma-separated exact origins (default: none)
   GEMINI_API_KEY       Gemini API key for embeddings & consolidation
   ENGRAM_LLM_PROVIDER  LLM provider: gemini | openai | anthropic
   ENGRAM_LLM_API_KEY   LLM API key (falls back to GEMINI_API_KEY for gemini)
@@ -754,9 +757,12 @@ Example:
     } : {}),
   };
 
+  const authToken = requireAuthToken('engram-serve');
+
   const srv = createEngramServer({
     port,
     host,
+    authToken,
     vaults: {},
     defaultVault: vaultConfig,
   });

@@ -11,6 +11,7 @@ import { tmpdir } from 'os';
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'engram-server-test-'));
 const dbPath = join(tmpDir, 'test.db');
+const TEST_TOKEN = 'test-token-abc123';
 
 const vaultConfig: VaultConfig = {
   owner: 'test-agent',
@@ -25,6 +26,7 @@ beforeAll(async () => {
   server = createEngramServer({
     port,
     host: '127.0.0.1',
+    authToken: TEST_TOKEN,
     vaults: {},
     defaultVault: vaultConfig,
   });
@@ -37,11 +39,14 @@ afterAll(async () => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// Helper
+// Helper — every call carries the bearer token.
 async function api(method: string, path: string, body?: unknown) {
   const res = await fetch(`${baseUrl}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${TEST_TOKEN}`,
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json();
@@ -228,7 +233,10 @@ describe('Error handling', () => {
   it('500 on malformed JSON body', async () => {
     const res = await fetch(`${baseUrl}/v1/memories`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TEST_TOKEN}`,
+      },
       body: '{invalid json',
     });
     expect(res.status).toBe(500);
@@ -277,6 +285,7 @@ describe('Attribution disabled', () => {
     attrServer = createEngramServer({
       port,
       host: '127.0.0.1',
+      authToken: TEST_TOKEN,
       vaults: {},
       defaultVault: {
         owner: 'test-no-attr',
@@ -296,7 +305,10 @@ describe('Attribution disabled', () => {
   async function attrApi(method: string, path: string, body?: unknown) {
     const res = await fetch(`${attrBaseUrl}${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TEST_TOKEN}`,
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     return { status: res.status, data: await res.json() };
@@ -325,6 +337,7 @@ describe('Attribution custom text', () => {
     customServer = createEngramServer({
       port,
       host: '127.0.0.1',
+      authToken: TEST_TOKEN,
       vaults: {},
       defaultVault: {
         owner: 'test-custom-attr',
@@ -344,7 +357,10 @@ describe('Attribution custom text', () => {
   async function customApi(method: string, path: string, body?: unknown) {
     const res = await fetch(`${customBaseUrl}${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TEST_TOKEN}`,
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     return { status: res.status, data: await res.json() };
@@ -360,5 +376,51 @@ describe('Attribution custom text', () => {
     const { data } = await customApi('GET', '/v1/powered-by');
     expect(data.text).toBe('Powered by Acme Memory');
     expect(data.link).toBe('');
+  });
+});
+
+// ============================================================
+// Auth + CORS hardening
+// ============================================================
+
+describe('Authentication', () => {
+  it('rejects a request with no token', async () => {
+    const res = await fetch(`${baseUrl}/v1/stats`);
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a request with a wrong token', async () => {
+    const res = await fetch(`${baseUrl}/v1/stats`, {
+      headers: { Authorization: 'Bearer wrong-token' },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('accepts a request with the correct token', async () => {
+    const res = await fetch(`${baseUrl}/v1/stats`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('leaves /health open for container probes', async () => {
+    const res = await fetch(`${baseUrl}/health`);
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('CORS', () => {
+  it('sends no ACAO header when no allowlist is configured', async () => {
+    const res = await fetch(`${baseUrl}/health`, {
+      headers: { Origin: 'https://evil.example.com' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('does not prefix-match localhost lookalikes', async () => {
+    const res = await fetch(`${baseUrl}/health`, {
+      headers: { Origin: 'http://localhost.evil.com' },
+    });
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
   });
 });
