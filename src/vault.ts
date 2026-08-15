@@ -7,6 +7,7 @@ import type { EmbeddingProvider } from './embeddings.js';
 import { extract } from './extract.js';
 import { calculateRecencyBoost, DEFAULT_TEMPORAL_CONFIG, findContradictionCandidates, verifyContradiction, temporalEdgeWeight } from './temporal.js';
 import type { TemporalConfig } from './temporal.js';
+import { geminiEndpoint, resolveLlmModel } from './config.js';
 
 // ============================================================
 // Retry helper for rate-limited API calls
@@ -294,9 +295,7 @@ export class Vault {
     if (memory.content.length < 40) return;
 
     const llmConfig = this.config.llm;
-    const model = llmConfig.provider === 'gemini' ? 'gemini-2.5-flash'
-      : llmConfig.provider === 'openai' ? 'gpt-4o-mini'
-      : 'claude-3-5-haiku-20241022';
+    const model = resolveLlmModel(llmConfig.model);
 
     const prompt = `Given this memory about a person, extract 0-2 basic personal insights that any human would obviously infer. Focus on interests, personality traits, preferences, and relationships.
 
@@ -459,7 +458,7 @@ If nothing: {"insights": []}`;
 
       // Phase 2: LLM verification — check top 3 candidates max
       const llmCall = (prompt: string) => this.callLLM(
-        this.config.llm!.model ?? 'gemini-2.5-flash',
+        resolveLlmModel(this.config.llm!.model),
         prompt,
         this.config.llm!,
       );
@@ -1478,7 +1477,7 @@ Confidence guide:
 
     // Step 3: Call LLM for synthesis
     const llmConfig = this.config.llm;
-    const model = llmConfig.model ?? 'gemini-2.5-flash';
+    const model = resolveLlmModel(llmConfig.model);
     const response = await this.callLLM(model, prompt, llmConfig);
 
     // Step 4: Parse response
@@ -1741,7 +1740,7 @@ Respond as JSON:
 Extract up to ${maxClaims} claims. Focus on specific facts (names, numbers, dates, statuses, relationships) not opinions or vague statements.`;
 
     const llmConfig = this.config.llm;
-    const model = llmConfig.model ?? 'gemini-2.5-flash';
+    const model = resolveLlmModel(llmConfig.model);
     const extractResponse = await this.callLLM(model, extractPrompt, llmConfig);
 
     let claims: string[] = [];
@@ -1904,7 +1903,7 @@ Type guide: "semantic" for facts/knowledge, "episodic" for events/conversations,
 Status: "active" for current facts, "pending" for commitments not yet fulfilled.`;
 
     const llmConfig = this.config.llm;
-    const model = llmConfig.model ?? 'gemini-2.5-flash';
+    const model = resolveLlmModel(llmConfig.model);
     const response = await this.callLLM(model, extractPrompt, llmConfig);
 
     type ExtractedMemory = {
@@ -2327,7 +2326,11 @@ Respond in this exact JSON format:
 Keep entities specific and topics general. Limit to 10 entities and 8 topics max.`;
 
     try {
-      const response = await this.callLLM('gemini-2.5-flash', prompt, this.config.llm);
+      const response = await this.callLLM(
+        resolveLlmModel(this.config.llm.model),
+        prompt,
+        this.config.llm,
+      );
       const result = JSON.parse(response);
       
       return {
@@ -2409,10 +2412,7 @@ Keep entities specific and topics general. Limit to 10 entities and 8 topics max
     }
 
     const llmConfig = this.config.llm!;
-    const defaultModel = llmConfig.provider === 'gemini' ? 'gemini-2.5-flash'
-      : llmConfig.provider === 'openai' ? 'gpt-4o-mini'
-      : 'claude-3-5-haiku-20241022';
-    const model = llmConfig.model ?? defaultModel;
+    const model = resolveLlmModel(llmConfig.model);
 
     // Build the consolidation prompt
     const episodeSummaries = episodes.map((e, i) =>
@@ -2579,10 +2579,9 @@ Be conservative with explicit memories. Be observant with implicit ones — look
     }
 
     if (config.provider === 'gemini') {
-      const geminiModel = model.startsWith('gemini') ? model : 'gemini-2.5-flash';
       return withRetry(async () => {
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${config.apiKey}`,
+          geminiEndpoint(model, 'generateContent', config.apiKey),
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

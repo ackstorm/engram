@@ -2,6 +2,8 @@
 // Embedding Provider — Pluggable embedding generation
 // ============================================================
 
+import { geminiEndpoint, resolveEmbeddingModel } from './config.js';
+
 // ============================================================
 // Retry helper for rate-limited API calls
 // ============================================================
@@ -107,16 +109,16 @@ export class GeminiEmbeddings implements EmbeddingProvider {
   private model: string;
   private dims: number;
 
-  constructor(apiKey: string, model: string = 'gemini-embedding-001', dims: number = 3072) {
+  constructor(apiKey: string, model?: string, dims: number = 3072) {
     this.apiKey = apiKey;
-    this.model = model;
+    this.model = resolveEmbeddingModel(model);
     this.dims = dims;
   }
 
   async embed(text: string): Promise<number[]> {
     return withRetry(async () => {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent?key=${this.apiKey}`,
+        geminiEndpoint(this.model, 'embedContent', this.apiKey),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -140,7 +142,7 @@ export class GeminiEmbeddings implements EmbeddingProvider {
   async embedBatch(texts: string[]): Promise<number[][]> {
     return withRetry(async () => {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:batchEmbedContents?key=${this.apiKey}`,
+        geminiEndpoint(this.model, 'batchEmbedContents', this.apiKey),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

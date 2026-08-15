@@ -17,6 +17,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { geminiEndpoint, resolveLlmModel } from './config.js';
 
 // ============================================================
 // Config
@@ -291,7 +292,7 @@ If the session is trivial (just fixing typos, running commands), respond: {"memo
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      geminiEndpoint(resolveLlmModel(), 'generateContent', GEMINI_API_KEY!),
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

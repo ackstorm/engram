@@ -7,6 +7,7 @@ import { checkForUpdates, getVersion } from './update-check.js';
 import { createServer } from 'node:http';
 import path from 'path';
 import os from 'os';
+import { geminiEndpoint, resolveLlmModel, resolveEmbeddingModel } from './config.js';
 
 // ============================================================
 // Engram REST API Server
@@ -31,7 +32,7 @@ function getOrCreateVault(config: VaultConfig): Vault {
     let embedder: EmbeddingProvider | undefined;
     if (config.llm) {
       if (config.llm.provider === 'gemini') {
-        embedder = new GeminiEmbeddings(config.llm.apiKey, config.llm.embeddingModel ?? 'gemini-embedding-001');
+        embedder = new GeminiEmbeddings(config.llm.apiKey, resolveEmbeddingModel(config.llm.embeddingModel));
       } else {
         embedder = new OpenAIEmbeddings(config.llm.apiKey, config.llm.embeddingModel ?? 'text-embedding-3-small');
       }
@@ -531,7 +532,7 @@ Respond as JSON:
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+      geminiEndpoint(resolveLlmModel(), 'generateContent', geminiKey),
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -25,6 +25,7 @@
 
 // Must be the first import — protects stdout before anything else can log.
 import './stdio-guard.js';
+import { geminiEndpoint, resolveLlmModel } from './config.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -370,7 +371,7 @@ If nothing worth remembering: {"memories": []}`;
 
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
+        geminiEndpoint(resolveLlmModel(), 'generateContent', geminiKey),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
