@@ -26,6 +26,7 @@
 // Must be the first import — protects stdout before anything else can log.
 import './stdio-guard.js';
 import { geminiEndpoint, resolveLlmModel } from './config.js';
+import { requireAuthToken, checkBearerToken, resolveCorsOrigin, corsAllowlist } from './config.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -801,15 +802,25 @@ async function main() {
   const mcpPort = parseInt(process.env.ENGRAM_MCP_PORT ?? '3801', 10);
 
   if (mode === 'http') {
-    // Streamable HTTP transport for remote MCP clients
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
+    // Every HTTP listener is authenticated — no loopback exemption.
+    const authToken = requireAuthToken('engram-mcp --http');
+    const mcpHost = process.env.ENGRAM_MCP_HOST ?? '127.0.0.1';
+
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+    });
     await server.connect(transport);
 
     const httpServer = createHttpServer(async (req, res) => {
-      // CORS for browser-based clients
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      // CORS — exact-origin allowlist, empty by default.
+      const requestOrigin = req.headers.origin ?? '';
+      const allowedOrigin = resolveCorsOrigin(requestOrigin, corsAllowlist());
+      if (allowedOrigin) {
+        res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+        res.setHeader('Vary', 'Origin');
+      }
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, mcp-session-id');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, mcp-session-id');
       res.setHeader('Access-Control-Expose-Headers', 'mcp-session-id');
 
       if (req.method === 'OPTIONS') {
@@ -818,20 +829,31 @@ async function main() {
         return;
       }
 
-      if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
-        await transport.handleRequest(req, res);
-      } else if (req.url === '/health') {
+      // /health stays open for container probes — it exposes no vault data.
+      if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', transport: 'streamable-http' }));
-      } else {
-        res.writeHead(404);
-        res.end('Not found');
+        return;
       }
+
+      if (!checkBearerToken(req.headers.authorization, authToken)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid or missing bearer token' }));
+        return;
+      }
+
+      if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
+        await transport.handleRequest(req, res);
+        return;
+      }
+
+      res.writeHead(404);
+      res.end('Not found');
     });
 
-    httpServer.listen(mcpPort, () => {
-      console.error(`🧠 Engram MCP server running (HTTP, port ${mcpPort})`);
-      console.error(`   Endpoint: http://localhost:${mcpPort}/mcp`);
+    httpServer.listen(mcpPort, mcpHost, () => {
+      console.error(`🧠 Engram MCP server running (HTTP, ${mcpHost}:${mcpPort})`);
+      console.error(`   Endpoint: http://${mcpHost}:${mcpPort}/mcp (bearer token required)`);
       console.error(`   Owner: ${owner}, DB: ${dbPath}`);
       if (embedder) console.error(`   Embeddings: ${geminiKey ? 'Gemini' : 'OpenAI'}`);
       if (llmProvider) console.error(`   LLM: ${llmProvider} (consolidation enabled)`);
@@ -858,4 +880,9 @@ async function main() {
   }
 }
 
-main().catch(console.error);
+// A failed startup must exit non-zero — otherwise a container that never
+// began serving still reports success to its supervisor.
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
