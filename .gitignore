@@ -20,3 +20,7 @@ signal-quality-plan.md
 .mcpregistry_*
 .env*
 !.env.example
+
+# Agent working files — implementation plans are disposable once executed
+.claude/
+docs/superpowers/
