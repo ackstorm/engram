@@ -23,6 +23,8 @@
 // Or run standalone:
 //   ENGRAM_OWNER=my-agent npx tsx src/mcp.ts
 
+// Must be the first import — protects stdout before anything else can log.
+import './stdio-guard.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
