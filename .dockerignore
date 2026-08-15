@@ -1,9 +1,14 @@
 node_modules
 dist
 .git
-.gitignore
-eval-scale-data
-*.test.ts
+.github
+docs
+assets
 *.md
+*.db
+*.db-shm
+*.db-wal
 .env*
 .DS_Store
+.claude
+src/__tests__
