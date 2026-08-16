@@ -54,6 +54,21 @@ async function main(): Promise<void> {
     await vault.flush();
     if (embedder) await vault.backfillEmbeddings();
 
+    // Embedding is fire-and-forget inside remember(), so a rate-limited or
+    // failing provider leaves the vault silently unvectorised and the whole
+    // benchmark measures the keyword path while claiming otherwise. Verify.
+    if (embedder) {
+      const embedded = countEmbedded(vault);
+      if (embedded < MEMORIES.length) {
+        console.error(
+          `\nEmbedding incomplete: ${embedded}/${MEMORIES.length} memories have vectors. ` +
+          'Usually rate limiting. Results would measure the keyword path while ' +
+          'claiming otherwise — rerun with a pause between runs.',
+        );
+        process.exit(2);
+      }
+    }
+
     const results: CaseResult[] = [];
     for (const q of QUERIES) {
       const hits = await vault.recall({ context: q.query, limit: 5 });
@@ -72,6 +87,17 @@ async function main(): Promise<void> {
   } finally {
     await vault.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** How many memories actually have a stored vector. */
+function countEmbedded(vault: Vault): number {
+  const db = (vault as unknown as { store: { db: { prepare: (q: string) => { get: () => unknown } } } }).store.db;
+  try {
+    const row = db.prepare('SELECT count(*) AS c FROM vec_memories').get() as { c: number };
+    return row.c;
+  } catch {
+    return 0;
   }
 }
 

@@ -5,6 +5,7 @@ import {
   openaiBaseUrl,
   resolveEmbeddingModel,
   resolveEmbeddingDims,
+  resolveEmbeddingDims,
 } from '../config.js';
 import { createEmbedder, OpenAIEmbeddings } from '../embeddings.js';
 
@@ -198,5 +199,30 @@ describe('createEmbedder', () => {
 
   it('returns undefined when nothing is configured', () => {
     expect(createEmbedder()).toBeUndefined();
+  });
+});
+
+describe('model-aware dimensions', () => {
+  it('derives 3072 for text-embedding-3-large', () => {
+    expect(resolveEmbeddingDims('openai', undefined, 'text-embedding-3-large')).toBe(3072);
+  });
+
+  it('derives 1536 for text-embedding-3-small', () => {
+    expect(resolveEmbeddingDims('openai', undefined, 'text-embedding-3-small')).toBe(1536);
+  });
+
+  it('matches gateway-namespaced model names', () => {
+    // LiteLLM-style prefixes must resolve the same as the bare name, or the
+    // vector table is built at the provider default and every write fails.
+    expect(resolveEmbeddingDims('openai', undefined, 'openai.text-embedding-3-large')).toBe(3072);
+  });
+
+  it('falls back to the provider default for an unknown model', () => {
+    expect(resolveEmbeddingDims('openai', undefined, 'some-local-bge-model')).toBe(1536);
+  });
+
+  it('lets ENGRAM_EMBEDDING_DIMS override a known model, for MRL', () => {
+    process.env.ENGRAM_EMBEDDING_DIMS = '512';
+    expect(resolveEmbeddingDims('openai', undefined, 'text-embedding-3-large')).toBe(512);
   });
 });

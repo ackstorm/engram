@@ -71,7 +71,7 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
     this.apiKey = apiKey;
     this.model = resolveEmbeddingModel('openai', model);
     this.explicitDims = dims !== undefined || !!process.env.ENGRAM_EMBEDDING_DIMS?.trim();
-    this.dims = resolveEmbeddingDims('openai', dims);
+    this.dims = resolveEmbeddingDims('openai', dims, this.model);
     this.baseUrl = baseUrl?.replace(/\/+$/, '') ?? openaiBaseUrl();
   }
 
@@ -130,7 +130,7 @@ export class GeminiEmbeddings implements EmbeddingProvider {
   constructor(apiKey: string, model?: string, dims?: number) {
     this.apiKey = apiKey;
     this.model = resolveEmbeddingModel('gemini', model);
-    this.dims = resolveEmbeddingDims('gemini', dims);
+    this.dims = resolveEmbeddingDims('gemini', dims, this.model);
   }
 
   async embed(text: string): Promise<number[]> {

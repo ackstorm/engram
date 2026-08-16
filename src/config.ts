@@ -121,13 +121,44 @@ export function resolveEmbeddingModel(provider: ModelProvider, configured?: stri
 }
 
 /**
- * Embedding dimension. Override with ENGRAM_EMBEDDING_DIMS when pointing at a
- * gateway whose model is not one of the provider defaults.
+ * Native output width of models we know, matched on suffix so gateway
+ * namespacing ("openai.text-embedding-3-large") resolves the same as the bare
+ * name. Without this a provider-level default is used, and switching from
+ * -small to -large builds the vector table at 1536 while the API returns 3072
+ * — every write then fails with a bare SQL error, and because embedding is
+ * fire-and-forget the vault silently ends up with no vectors at all.
  */
-export function resolveEmbeddingDims(provider: ModelProvider, configured?: number): number {
+const KNOWN_MODEL_DIMS: Array<[string, number]> = [
+  ['text-embedding-3-small', 1536],
+  ['text-embedding-3-large', 3072],
+  ['text-embedding-ada-002', 1536],
+  ['gemini-embedding-001', 3072],
+  ['gemini-embedding-2', 3072],
+];
+
+/** Native dimension for a model name, or undefined when unrecognised. */
+export function knownModelDims(model: string): number | undefined {
+  const name = model.trim().toLowerCase();
+  return KNOWN_MODEL_DIMS.find(([m]) => name.endsWith(m))?.[1];
+}
+
+/**
+ * Embedding dimension. Resolution order: explicit argument, then
+ * ENGRAM_EMBEDDING_DIMS, then the model's known native width, then the
+ * provider default. Set ENGRAM_EMBEDDING_DIMS only for a model we do not
+ * recognise, or to request a shortened MRL vector.
+ */
+export function resolveEmbeddingDims(
+  provider: ModelProvider,
+  configured?: number,
+  model?: string,
+): number {
   if (configured !== undefined) return configured;
   const raw = process.env.ENGRAM_EMBEDDING_DIMS?.trim();
-  if (!raw) return EMBEDDING_DEFAULTS[provider].dims;
+  if (!raw) {
+    const known = model ? knownModelDims(model) : undefined;
+    return known ?? EMBEDDING_DEFAULTS[provider].dims;
+  }
   const dims = Number(raw);
   if (!Number.isInteger(dims) || dims <= 0) {
     throw new Error(`[engram] ENGRAM_EMBEDDING_DIMS must be a positive integer, got '${raw}'.`);
