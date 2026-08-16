@@ -565,7 +565,13 @@ If nothing: {"insights": []}`;
   // recall() — Retrieve relevant memories for a context
   // --------------------------------------------------------
 
-  async recall(input: RecallInput | string): Promise<Memory[]> {
+  /**
+   * Recall with relevance scores retained. MemoryRouter needs these to merge
+   * results from two stores — scores are comparable across stores because
+   * nothing in the pipeline is corpus-relative and both share one embedding
+   * configuration.
+   */
+  async recallScored(input: RecallInput | string): Promise<Array<{ memory: Memory; score: number }>> {
     const parsed: RecallParsed = typeof input === 'string'
       ? RecallInputSchema.parse({ context: input })
       : RecallInputSchema.parse(input);
@@ -900,7 +906,11 @@ If nothing: {"insights": []}`;
       this.store.getMemory(r.memory.id); // Triggers access count + stability update
     }
 
-    return topResults.map(r => r.memory);
+    return topResults;
+  }
+
+  async recall(input: RecallInput | string): Promise<Memory[]> {
+    return (await this.recallScored(input)).map(r => r.memory);
   }
 
   // --------------------------------------------------------

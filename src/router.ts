@@ -94,14 +94,19 @@ export class MemoryRouter {
     const perStore = await Promise.all(
       targets.map(async ({ scope, vault }) => {
         const { scope: _drop, ...vaultInput } = parsed;
-        const hits = await vault.recall(vaultInput as RecallInput);
-        return hits.map(m => ({ ...m, scope }) as ScopedMemory);
+        const hits = await vault.recallScored(vaultInput as RecallInput);
+        return hits.map(h => ({ memory: { ...h.memory, scope } as ScopedMemory, score: h.score }));
       }),
     );
 
-    const merged = perStore.flat();
+    // Sort across stores before truncating. Concatenating and slicing would
+    // return whichever store happens to be first, regardless of relevance.
     const limit = parsed.limit ?? 10;
-    return merged.slice(0, limit);
+    return perStore
+      .flat()
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(r => r.memory);
   }
 
   getById(id: string): ScopedMemory | null {

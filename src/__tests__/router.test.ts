@@ -59,9 +59,32 @@ describe('merged reads', () => {
     expect(g[0].scope).toBe('global');
   });
 
-  it('applies limit AFTER merging, not per store', async () => {
-    const results = await router.recall({ context: 'linter', limit: 1 });
-    expect(results.length).toBe(1);
+  it('truncates by score across stores, not by store order', async () => {
+    // Fill global with weak matches so store-order truncation would return
+    // only global rows, and put the single strong match in project.
+    for (let i = 0; i < 10; i++) {
+      router.remember('global', { content: `unrelated note number ${i} about cooking` });
+    }
+    router.remember('project', {
+      content: 'the linter is configured with pnpm lint and biome in this repo',
+    });
+
+    const results = await router.recall({ context: 'linter configuration', limit: 3 });
+
+    expect(results.length).toBeLessThanOrEqual(3);
+    expect(results.some(r => r.scope === 'project')).toBe(true);
+    expect(results[0].scope).toBe('project');
+  });
+
+  it('returns results in descending relevance regardless of store', async () => {
+    // limit: 2, not 5 — Vault.recall always folds in a handful of recent
+    // memories as a weak recency signal (score 0.05), so a looser limit
+    // would let the unrelated linter rows from the outer beforeEach back in.
+    // That's out of scope for the router's merge-sort, which this test covers.
+    router.remember('global', { content: 'kubernetes ingress controller tuning' });
+    router.remember('project', { content: 'kubernetes ingress controller tuning for this service' });
+    const results = await router.recall({ context: 'kubernetes ingress', limit: 2 });
+    expect(results.length).toBe(2);
   });
 });
 
