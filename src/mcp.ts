@@ -32,9 +32,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer as createHttpServer } from 'node:http';
 import { z } from 'zod';
-import { Vault } from './vault.js';
-import { createEmbedder } from './embeddings.js';
-import type { VaultConfig, Memory } from './types.js';
+import { MemoryRouter } from './router.js';
+import { resolveVaultPath, isSingleStoreMode, resolveProject } from './config.js';
 import path from 'path';
 import { homedir } from 'os';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
@@ -48,38 +47,20 @@ checkForUpdates();
 // Config from environment
 // ============================================================
 
-const owner = process.env.ENGRAM_OWNER ?? 'default';
-const engramDir = path.join(homedir(), '.engram');
-const dbPath = process.env.ENGRAM_DB_PATH ?? path.join(engramDir, `${owner}.db`);
 const geminiKey = process.env.GEMINI_API_KEY;
 const openaiKey = process.env.OPENAI_API_KEY;
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
 
-// Determine LLM provider
+// Determine LLM provider (for startup banner / engram_ingest's LLM-vs-simple branch)
 const llmProvider = process.env.ENGRAM_LLM_PROVIDER ??
   (geminiKey ? 'gemini' : openaiKey ? 'openai' : anthropicKey ? 'anthropic' : undefined);
-const llmKey = process.env.ENGRAM_LLM_API_KEY ?? geminiKey ?? openaiKey ?? anthropicKey;
-const llmBaseUrl = process.env.ENGRAM_LLM_BASE_URL;
+const hasEmbedder = Boolean(geminiKey || openaiKey);
 
 // ============================================================
-// Initialize Vault
+// Initialize the router — global vault + per-project vault
 // ============================================================
 
-const vaultConfig: VaultConfig = {
-  owner,
-  dbPath,
-  ...(llmProvider && llmKey ? {
-    llm: {
-      provider: llmProvider as 'gemini' | 'openai' | 'anthropic',
-      apiKey: llmKey,
-      ...(llmBaseUrl ? { baseUrl: llmBaseUrl } : {}),
-    },
-  } : {}),
-};
-
-const embedder = createEmbedder({ apiKey: llmKey });
-
-const vault = new Vault(vaultConfig, embedder);
+const router = MemoryRouter.open();
 
 // ============================================================
 // Auto-ingest state
@@ -119,6 +100,18 @@ const server = new McpServer({
   version: getVersion(),
 });
 
+// Shared across every write tool so the required-scope rule can't drift
+// between them — a memory filed too narrowly is merely invisible elsewhere,
+// while one filed too broadly is noise in every project forever.
+const SCOPE_SCHEMA = z.enum(['project', 'global']).describe(
+  "Where this belongs. 'global' = true about the user or their organisation " +
+  "regardless of which codebase they are in (preferences, traits, company-wide " +
+  "rules, personal habits and personal history). 'project' = specific to this " +
+  'repository. When unsure, choose project — a memory filed too narrowly is ' +
+  'merely invisible elsewhere, while one filed too broadly is noise in every ' +
+  'project forever.',
+);
+
 // ============================================================
 // Tool: remember
 // ============================================================
@@ -128,6 +121,7 @@ server.tool(
   'Store a memory. Call this PROACTIVELY — do not wait to be asked. Store when: (1) the user shares a preference, fact, decision, or personal detail, (2) you read or synthesize useful knowledge from files, docs, or context (style guides, architecture patterns, workflow rules), (3) you learn HOW the user works (communication style, review patterns, tool preferences), (4) the user corrects you or clarifies something. If knowledge would be useful in a future session, store it NOW.',
   {
     content: z.string().describe('The memory content — a clear statement worth remembering'),
+    scope: SCOPE_SCHEMA,
     type: z.enum(['episodic', 'semantic', 'procedural', 'profile']).optional().describe('Memory type: episodic (events), semantic (facts), procedural (how-to), profile (stable user traits/preferences)'),
     entities: z.array(z.string()).optional().describe('People, projects, tools, places mentioned'),
     topics: z.array(z.string()).optional().describe('Topic tags'),
@@ -136,7 +130,7 @@ server.tool(
   },
   async (args) => {
     try {
-      const memory = vault.remember({
+      const memory = router.remember(args.scope, {
         content: args.content,
         type: args.type,
         entities: args.entities,
@@ -145,26 +139,23 @@ server.tool(
         status: args.status,
       });
 
-      if (embedder) {
-        vault.computeAndStoreEmbedding(memory.id, memory.content).catch(() => {});
-      }
-
       const preview = memory.content.length > 80
         ? memory.content.slice(0, 77) + '...'
         : memory.content;
 
-      const verified = vault.stats();
+      const verified = router.stats();
+      const scopeStats = memory.scope === 'global' ? verified.global : verified.project ?? verified.global;
       return {
         content: [{
           type: 'text',
-          text: `✓ Remembered: "${preview}"\n  Vault: ${owner} | Total memories: ${verified.total} | Entities: ${memory.entities.join(', ') || 'none'}\n  ID: ${memory.id} | Type: ${memory.type} | Status: ${memory.status}`,
+          text: `✓ Remembered: "${preview}"\n  Scope: ${memory.scope} | Total memories in scope: ${scopeStats.total} | Entities: ${memory.entities.join(', ') || 'none'}\n  ID: ${memory.id} | Type: ${memory.type} | Status: ${memory.status}`,
         }],
       };
     } catch (err: any) {
       return {
         content: [{
           type: 'text',
-          text: `✗ FAILED to store memory: ${err.message}\n  Vault: ${owner} | DB: ${dbPath}\n  Content: ${args.content.slice(0, 100)}`,
+          text: `✗ FAILED to store memory: ${err.message}\n  Scope: ${args.scope}\n  Content: ${args.content.slice(0, 100)}`,
         }],
         isError: true,
       };
@@ -181,6 +172,9 @@ server.tool(
   'Recall relevant memories from the local vault.',
   {
     context: z.string().describe('What you want to remember — a question or topic'),
+    scope: z.enum(['project', 'global']).optional().describe(
+      'Restrict to one store. Omit to search both, which is almost always what you want.',
+    ),
     entities: z.array(z.string()).optional().describe('Filter by specific entities'),
     topics: z.array(z.string()).optional().describe('Filter by topics'),
     limit: z.number().int().min(1).max(50).optional().describe('Max results (default 10)'),
@@ -188,8 +182,9 @@ server.tool(
   },
   async (args) => {
     const limit = args.limit ?? 10;
-    const memories = await vault.recall({
+    const memories = await router.recall({
       context: args.context,
+      scope: args.scope,
       entities: args.entities,
       topics: args.topics,
       limit,
@@ -219,7 +214,7 @@ server.tool(
   },
   async (args) => {
     try {
-      const result = vault.forget(args.id, args.hard ?? false);
+      const result = router.forget(args.id, args.hard ?? false);
       if (!result.found) {
         return { content: [{ type: 'text', text: `Error: no memory found matching ID "${args.id}"` }] };
       }
@@ -245,7 +240,7 @@ server.tool(
     all: z.boolean().optional().describe('Process all unconsolidated episodes regardless of age'),
   },
   async (args: { since?: string; all?: boolean }) => {
-    const report = await vault.consolidate({ since: args.since, all: args.all });
+    const report = await router.consolidate({ since: args.since, all: args.all });
     return {
       content: [{
         type: 'text',
@@ -273,7 +268,7 @@ server.tool(
     strength: z.number().min(0).max(1).optional().describe('Connection strength 0-1'),
   },
   async (args) => {
-    const edge = vault.connect(args.sourceId, args.targetId, args.type, args.strength);
+    const edge = router.connect(args.sourceId, args.targetId, args.type, args.strength);
     return {
       content: [{ type: 'text', text: `Connected: ${args.sourceId} —[${args.type}]→ ${args.targetId} (strength: ${edge.strength})` }],
     };
@@ -289,14 +284,15 @@ server.tool(
   'Get vault statistics — memory counts by type, entity count, etc.',
   {},
   async (args) => {
-    const stats = vault.stats();
-    const entities = vault.entities();
+    const stats = router.stats();
+    const entities = router.entities();
+    const totalMemories = stats.global.total + (stats.project?.total ?? 0);
     let text = JSON.stringify({
       ...stats,
       topEntities: entities.slice(0, 10).map(e => ({ name: e.name, memories: e.memoryCount })),
     }, null, 2);
 
-    if (stats.total < 5) {
+    if (totalMemories < 5) {
       text += '\n\n🧠 This vault is nearly empty! To bootstrap your memory, try asking the agent:\n'
         + '- "Import my Obsidian vault from ~/path/to/vault" (uses engram_import_obsidian tool)\n'
         + '- "Import my Claude Code memory" (uses engram_import_claude_code tool)\n'
@@ -321,12 +317,13 @@ server.tool(
   'Auto-extract memories from a conversation transcript or raw text using LLM. Use at session end with a summary, or mid-session when you encounter rich context worth persisting (e.g., after reading a style guide, architecture doc, or long discussion).',
   {
     text: z.string().describe('Raw conversation text or transcript to ingest'),
+    scope: SCOPE_SCHEMA,
     humanName: z.string().optional().describe('Name of the human in the conversation'),
   },
   async (args) => {
     if (!geminiKey) {
       // Simple mode: just remember with auto-extraction
-      const memory = vault.remember({ content: args.text });
+      const memory = router.remember(args.scope, { content: args.text });
       return { content: [{ type: 'text', text: `Stored 1 memory (simple mode — set GEMINI_API_KEY for LLM extraction).` }] };
     }
 
@@ -378,7 +375,7 @@ If nothing worth remembering: {"memories": []}`;
       );
 
       if (!response.ok) {
-        const memory = vault.remember({ content: args.text });
+        const memory = router.remember(args.scope, { content: args.text });
         return { content: [{ type: 'text', text: `LLM unavailable, stored 1 raw memory as fallback.` }] };
       }
 
@@ -393,7 +390,7 @@ If nothing worth remembering: {"memories": []}`;
         if (/(?:sk-|api[_-]?key|password|token|secret)[:\s=]+\S{10,}/i.test(mem.content)) continue;
         if (/AIza[a-zA-Z0-9_-]{30,}/.test(mem.content)) continue;
 
-        vault.remember({
+        router.remember(args.scope, {
           content: mem.content,
           type: mem.type ?? 'episodic',
           entities: mem.entities ?? [],
@@ -407,7 +404,7 @@ If nothing worth remembering: {"memories": []}`;
 
       return { content: [{ type: 'text', text: `Extracted ${created} memories from text.` }] };
     } catch (err) {
-      const memory = vault.remember({ content: args.text });
+      const memory = router.remember(args.scope, { content: args.text });
       return { content: [{ type: 'text', text: `LLM error, stored 1 raw memory as fallback.` }] };
     }
   },
@@ -425,7 +422,7 @@ server.tool(
     limit: z.number().int().min(1).max(50).optional().describe('Max memories to retrieve for context (default 20)'),
   },
   async (args) => {
-    const result = await vault.ask(args.question, { limit: args.limit });
+    const result = await router.ask(args.question, { limit: args.limit });
 
     // Build source summary lines
     const sourceLines = result.sources.slice(0, 5).map((s, i) =>
@@ -458,7 +455,7 @@ server.tool(
     limit: z.number().int().min(1).max(20).optional().describe('Max alerts (default 10)'),
   },
   async (args) => {
-    const alerts = vault.alerts({
+    const alerts = router.alerts({
       staleDays: args.staleDays,
       limit: args.limit,
     });
@@ -485,11 +482,12 @@ server.tool(
   'Save your current context before it is lost. Call this BEFORE context compaction or when a session is ending. Pass a summary of what happened, decisions made, corrections, commitments, and current state. Engram will extract and store durable memories from it. This is your last chance to save what you know.',
   {
     summary: z.string().describe('Summary of current session context — what happened, decisions, corrections, state changes, commitments'),
+    scope: SCOPE_SCHEMA,
     label: z.string().optional().describe('Label for this checkpoint (e.g., "pre-compact", "session-end")'),
     maxMemories: z.number().int().min(1).max(30).optional().describe('Max memories to extract (default 15)'),
   },
   async (args) => {
-    const result = await vault.checkpoint(args.summary, {
+    const result = await router.checkpoint(args.scope, args.summary, {
       label: args.label,
       maxMemories: args.maxMemories,
     });
@@ -520,7 +518,7 @@ server.tool(
     maxClaims: z.number().int().min(1).max(50).optional().describe('Max claims to check (default 20)'),
   },
   async (args) => {
-    const result = await vault.audit(args.content, { maxClaims: args.maxClaims });
+    const result = await router.audit(args.content, { maxClaims: args.maxClaims });
 
     if (result.discrepancies.length === 0) {
       return { content: [{ type: 'text', text: `Audited ${result.total} claims: ${result.verified} verified, 0 discrepancies. External content looks consistent with vault.` }] };
@@ -553,7 +551,7 @@ server.tool(
     seen: z.array(z.string()).optional().describe('Memory IDs already seen this session (to avoid repeats)'),
   },
   async (args) => {
-    const results = await vault.surface({
+    const results = await router.surface({
       context: args.context,
       activeEntities: args.activeEntities,
       activeTopics: args.activeTopics,
@@ -588,15 +586,15 @@ server.tool(
     context: z.string().optional().describe('Optional context to focus the briefing on'),
   },
   async (args) => {
-    const briefing = await vault.briefing(args.context ?? '');
+    const briefing = await router.briefing(args.context ?? '');
 
     // Include alerts in briefing so agents get them without a separate call
-    const alerts = vault.alerts({ limit: 5 });
+    const alerts = router.alerts({ limit: 5 });
 
     // Auto-consolidation: if it's been 24+ hours since last consolidation,
     // trigger one in the background. No cron needed, no permissions.
     try {
-      const recent = await vault.recall({
+      const recent = await router.recall({
         context: 'consolidation completed',
         topics: ['consolidation'],
         limit: 1,
@@ -606,7 +604,7 @@ server.tool(
         ? (Date.now() - new Date(lastConsolidation).getTime()) / (1000 * 60 * 60)
         : Infinity;
       if (hoursSince >= 24) {
-        vault.consolidate().catch(() => {});
+        router.consolidate().catch(() => {});
       }
     } catch {
       // Best-effort — never break briefing
@@ -696,7 +694,7 @@ server.tool(
   'List all tracked entities (people, projects, concepts) with memory counts.',
   {},
   async () => {
-    const entities = vault.entities();
+    const entities = router.entities();
     if (entities.length === 0) {
       return { content: [{ type: 'text', text: 'No entities tracked yet.' }] };
     }
@@ -716,13 +714,14 @@ server.tool(
   'Import an Obsidian vault into Engram. Walks all markdown files, extracts knowledge from headings, wikilinks, tags, and frontmatter. Great for bootstrapping a new vault with existing notes. Suggest this when the vault is empty.',
   {
     vaultPath: z.string().describe('Path to the Obsidian vault directory (e.g., ~/Documents/MyVault)'),
+    scope: SCOPE_SCHEMA,
     dryRun: z.boolean().optional().describe('Preview what would be imported without actually importing'),
     verbose: z.boolean().optional().describe('Show detailed progress for each file'),
   },
   async (args) => {
     try {
       const result = await importObsidian({
-        vault,
+        vault: router.vaultFor(args.scope),
         vaultPath: args.vaultPath,
         dryRun: args.dryRun,
         verbose: args.verbose,
@@ -748,6 +747,7 @@ server.tool(
   'Import memory from Claude Code (CLAUDE.md files, auto-memory, session transcripts). Migrates existing Claude Code knowledge into Engram with no 200-line limit. Suggest this when the vault is empty.',
   {
     includeSessions: z.boolean().optional().describe('Also parse JSONL session transcripts for high-signal messages'),
+    scope: SCOPE_SCHEMA,
     maxSessionsPerProject: z.number().int().min(1).optional().describe('Max sessions to parse per project (default: 10)'),
     dryRun: z.boolean().optional().describe('Preview what would be imported without actually importing'),
     verbose: z.boolean().optional().describe('Show detailed progress'),
@@ -755,7 +755,7 @@ server.tool(
   async (args) => {
     try {
       const result = await importClaudeCode({
-        vault,
+        vault: router.vaultFor(args.scope),
         dryRun: args.dryRun,
         includeSessions: args.includeSessions,
         maxSessionsPerProject: args.maxSessionsPerProject,
@@ -786,6 +786,49 @@ server.tool(
     };
   },
 );
+
+// ============================================================
+// Tool: move
+// ============================================================
+
+server.tool(
+  'engram_move',
+  'Move a memory to the other scope. Use when a memory was stored in the wrong place — ' +
+  'a personal preference filed under a project, or a repo-specific detail filed globally. ' +
+  'Edges to other memories are dropped, because they cannot span scopes.',
+  {
+    id: z.string().describe('Memory ID to move (from engram_recall output)'),
+    scope: z.enum(['project', 'global']).describe('Destination scope'),
+  },
+  async (args) => {
+    const result = router.move(args.id, args.scope);
+    if (!result.moved) {
+      return {
+        content: [{
+          type: 'text',
+          text: result.from
+            ? `Memory ${args.id} is already ${result.from}-scoped. Nothing to do.`
+            : `✗ No memory found matching ID "${args.id}".`,
+        }],
+        isError: !result.from,
+      };
+    }
+    const dropped = result.edgesDropped > 0
+      ? ` ${result.edgesDropped} connection(s) were dropped — edges cannot span scopes.`
+      : '';
+    return {
+      content: [{ type: 'text', text: `✓ Moved ${args.id} from ${result.from} to ${args.scope}.${dropped}` }],
+    };
+  },
+);
+
+/** Print the resolved store paths — the only place a user sees which vaults they got. */
+function printStoreBanner(): void {
+  console.error(`   global:  ${resolveVaultPath('global')}`);
+  if (!isSingleStoreMode()) {
+    console.error(`   project: ${resolveProject()} → ${resolveVaultPath('project')}`);
+  }
+}
 
 // ============================================================
 // Start server
@@ -848,16 +891,17 @@ async function main() {
     httpServer.listen(mcpPort, mcpHost, () => {
       console.error(`🧠 Engram MCP server running (HTTP, ${mcpHost}:${mcpPort})`);
       console.error(`   Endpoint: http://${mcpHost}:${mcpPort}/mcp (bearer token required)`);
-      console.error(`   Owner: ${owner}, DB: ${dbPath}`);
-      if (embedder) console.error(`   Embeddings: ${geminiKey ? 'Gemini' : 'OpenAI'}`);
+      printStoreBanner();
+      if (hasEmbedder) console.error(`   Embeddings: ${geminiKey ? 'Gemini' : 'OpenAI'}`);
       if (llmProvider) console.error(`   LLM: ${llmProvider} (consolidation enabled)`);
     });
   } else {
     // Default: stdio transport for local MCP (Claude Code, Cursor, etc.)
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error(`🧠 Engram MCP server running (owner: ${owner}, db: ${dbPath})`);
-    if (embedder) console.error(`   Embeddings: ${geminiKey ? 'Gemini' : 'OpenAI'}`);
+    console.error(`🧠 Engram MCP server running`);
+    printStoreBanner();
+    if (hasEmbedder) console.error(`   Embeddings: ${geminiKey ? 'Gemini' : 'OpenAI'}`);
     if (llmProvider) console.error(`   LLM: ${llmProvider} (consolidation enabled)`);
   }
 

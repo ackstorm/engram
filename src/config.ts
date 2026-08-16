@@ -8,6 +8,7 @@
 import { existsSync } from 'fs';
 import { join, basename, dirname, resolve } from 'path';
 import { homedir } from 'os';
+import type { VaultConfig } from './types.js';
 
 const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
 
@@ -76,6 +77,28 @@ export function resolveModelProvider(configured?: string): ModelProvider {
     `[engram] No embedding provider configured. Set ${MODEL_PROVIDER_ENV}=openai|gemini ` +
     'together with the matching OPENAI_API_KEY or GEMINI_API_KEY.',
   );
+}
+
+/**
+ * LLM config for consolidation, ask(), checkpoint() and audit() — separate
+ * from the embedding provider above. Shared by MemoryRouter.open() and the
+ * MCP server so both build the same {provider, apiKey, baseUrl} shape from
+ * the same env vars.
+ */
+export function resolveLlmConfig(): VaultConfig['llm'] | undefined {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const provider = process.env.ENGRAM_LLM_PROVIDER ??
+    (geminiKey ? 'gemini' : openaiKey ? 'openai' : anthropicKey ? 'anthropic' : undefined);
+  const apiKey = process.env.ENGRAM_LLM_API_KEY ?? geminiKey ?? openaiKey ?? anthropicKey;
+  if (!provider || !apiKey) return undefined;
+  const baseUrl = process.env.ENGRAM_LLM_BASE_URL;
+  return {
+    provider: provider as 'gemini' | 'openai' | 'anthropic',
+    apiKey,
+    ...(baseUrl ? { baseUrl } : {}),
+  };
 }
 
 /** Base URL for OpenAI-compatible embedding endpoints (Groq, vLLM, LiteLLM, Ollama…). */

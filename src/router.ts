@@ -16,8 +16,11 @@ import {
   type MemoryScope,
   resolveVaultPath,
   isSingleStoreMode,
+  resolveLlmConfig,
 } from './config.js';
-import type { Memory, Edge, Entity, RememberInput, RecallInput, ConsolidationReport } from './types.js';
+import type {
+  Memory, Edge, Entity, RememberInput, RecallInput, ConsolidationReport, AskResult,
+} from './types.js';
 
 // Memory.scope is a vestigial, disjoint field ('local'|'hosted'|'both') left over
 // from the old routing design — unrelated to MemoryScope. Omit it so the two
@@ -39,8 +42,9 @@ export class MemoryRouter {
   /** Build a router from the environment. */
   static open(cwd?: string): MemoryRouter {
     const embedder = createEmbedder();
+    const llm = resolveLlmConfig();
     const globalVault = new Vault(
-      { owner: 'global', dbPath: resolveVaultPath('global', cwd) },
+      { owner: 'global', dbPath: resolveVaultPath('global', cwd), ...(llm ? { llm } : {}) },
       embedder,
     );
     if (isSingleStoreMode()) {
@@ -51,14 +55,14 @@ export class MemoryRouter {
       return new MemoryRouter(globalVault, null);
     }
     const projectVault = new Vault(
-      { owner: 'project', dbPath: resolveVaultPath('project', cwd) },
+      { owner: 'project', dbPath: resolveVaultPath('project', cwd), ...(llm ? { llm } : {}) },
       embedder,
     );
     return new MemoryRouter(globalVault, projectVault);
   }
 
   /** The store backing a scope. Falls back to global in single-store mode. */
-  private vaultFor(scope: MemoryScope): Vault {
+  vaultFor(scope: MemoryScope): Vault {
     if (scope === 'global' || !this.projectVault) return this.globalVault;
     return this.projectVault;
   }
@@ -148,6 +152,115 @@ export class MemoryRouter {
       }
     }
     return [...byName.values()].sort((a, b) => b.memoryCount - a.memoryCount);
+  }
+
+  /**
+   * ask() synthesizes one LLM answer from one vault's own recall — it cannot
+   * accept externally-merged candidates. Running it on every store and
+   * picking the richer answer as primary (folding the other's sources in as
+   * supporting evidence) is the closest approximation without reworking
+   * Vault.ask() to take pre-fetched memories.
+   */
+  async ask(question: string, opts?: { limit?: number; spread?: boolean }): Promise<AskResult> {
+    const results = await Promise.all(
+      this.stores().map(async ({ scope, vault }) => ({
+        scope,
+        ...await vault.ask(question, opts),
+      })),
+    );
+    const rank = { high: 2, medium: 1, low: 0 } as const;
+    const [primary, ...rest] = results.sort(
+      (a, b) => rank[b.confidence] - rank[a.confidence] || b.sources.length - a.sources.length,
+    );
+    const extraSources = rest.flatMap(r => r.sources.map(s => ({ ...s, scope: r.scope })));
+    return {
+      ...primary,
+      sources: [...primary.sources.map(s => ({ ...s, scope: primary.scope })), ...extraSources],
+      reasoning: extraSources.length > 0
+        ? `${primary.reasoning ?? ''} (${extraSources.length} more source(s) found in the other scope.)`.trim()
+        : primary.reasoning,
+    };
+  }
+
+  async briefing(context = '', limit = 20): Promise<Awaited<ReturnType<Vault['briefing']>>> {
+    const parts = await Promise.all(this.stores().map(({ vault }) => vault.briefing(context, limit)));
+    const [first, ...rest] = parts;
+    const merged = rest.reduce((acc, p) => {
+      acc.summary += `\n${p.summary}`;
+      acc.keyFacts.push(...p.keyFacts);
+      acc.recentChanges.push(...p.recentChanges);
+      acc.activeCommitments.push(...p.activeCommitments);
+      acc.recentActivity.push(...p.recentActivity);
+      acc.contradictions.push(...p.contradictions);
+      for (const [entity, facts] of Object.entries(p.clusteredFacts)) {
+        (acc.clusteredFacts[entity] ??= []).push(...facts);
+      }
+      return acc;
+    }, first);
+    merged.topEntities = this.entities().slice(0, 20);
+    return merged;
+  }
+
+  alerts(opts?: {
+    staleDays?: number;
+    limit?: number;
+    includeContradictions?: boolean;
+  }): ReturnType<Vault['alerts']> {
+    const limit = opts?.limit ?? 10;
+    const priority = { high: 2, medium: 1, low: 0 } as const;
+    return this.stores()
+      .flatMap(({ vault }) => vault.alerts(opts))
+      .sort((a, b) => priority[b.priority] - priority[a.priority] || a.ageDays - b.ageDays)
+      .slice(0, limit);
+  }
+
+  async surface(input: Parameters<Vault['surface']>[0]): Promise<Array<{
+    memory: ScopedMemory; reason: string; relevance: number; activationPath: string;
+  }>> {
+    const limit = input.limit ?? 3;
+    const results = await Promise.all(
+      this.stores().map(async ({ scope, vault }) =>
+        (await vault.surface(input)).map(r => ({ ...r, memory: { ...r.memory, scope } as ScopedMemory })),
+      ),
+    );
+    return results
+      .flat()
+      .sort((a, b) => b.relevance - a.relevance)
+      .slice(0, limit);
+  }
+
+  /** Contradictions never cross stores — edges can't — so this just concatenates, tagging each with its store. */
+  contradictions(limit = 50): Array<ReturnType<Vault['contradictions']>[number] & { scope: MemoryScope }> {
+    return this.stores().flatMap(({ scope, vault }) =>
+      vault.contradictions(limit).map(c => ({ ...c, scope })),
+    );
+  }
+
+  /** Checkpoints are session context for one place in time — they target one store, chosen by the caller. */
+  async checkpoint(
+    scope: MemoryScope,
+    summary: string,
+    opts?: { maxMemories?: number; label?: string },
+  ): Promise<Awaited<ReturnType<Vault['checkpoint']>>> {
+    return this.vaultFor(scope).checkpoint(summary, opts);
+  }
+
+  /** Audits both stores against the same external content and merges the discrepancies found. */
+  async audit(
+    content: string,
+    opts?: { maxClaims?: number; relevanceThreshold?: number },
+  ): Promise<Awaited<ReturnType<Vault['audit']>>> {
+    const results = await Promise.all(this.stores().map(({ vault }) => vault.audit(content, opts)));
+    return results.reduce((acc, r) => ({
+      discrepancies: [...acc.discrepancies, ...r.discrepancies],
+      verified: acc.verified + r.verified,
+      total: Math.max(acc.total, r.total),
+    }));
+  }
+
+  async backfillEmbeddings(): Promise<number> {
+    const counts = await Promise.all(this.stores().map(({ vault }) => vault.backfillEmbeddings()));
+    return counts.reduce((a, b) => a + b, 0);
   }
 
   stats(): { global: ReturnType<Vault['stats']>; project?: ReturnType<Vault['stats']> } {
