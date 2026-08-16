@@ -557,8 +557,25 @@ async function runInit(values: Record<string, unknown>) {
       hooks: [{ type: 'command', command: consolidateCmd }],
     });
     hooks.Stop = filtered;
+
+    // Capture agent-authored commits as project memories. Matcher patterns
+    // vary across Claude Code versions, so filtering to `git commit` happens
+    // inside capture-commit itself, not here — every Bash call is dispatched
+    // to it and most are silently ignored.
+    if (!hooks.PostToolUse) hooks.PostToolUse = [];
+    const postToolUseHooks = hooks.PostToolUse as Array<Record<string, unknown>>;
+    const filteredPostToolUse = postToolUseHooks.filter((h: any) =>
+      !h.hooks?.some?.((hh: any) => hh.command?.includes?.('engram'))
+    );
+    filteredPostToolUse.push({
+      matcher: 'Bash',
+      hooks: [{ type: 'command', command: `${pathPrefix}${engramBin} capture-commit` }],
+    });
+    hooks.PostToolUse = filteredPostToolUse;
+
     writeFileSync(settingsPath, JSON.stringify(hookSettings, null, 2));
     console.log(`  ${green('✓')} Auto-consolidation on session end`);
+    console.log(`  ${green('✓')} Capturing agent commits as project memories`);
   }
 
   // 8. Create initial vault to verify setup
@@ -1082,6 +1099,16 @@ async function main() {
 
   if (command === 'doctor') {
     await runDoctor(values);
+    process.exit(0);
+  }
+
+  if (command === 'capture-commit') {
+    // Fed a Claude Code PostToolUse hook payload on stdin — reads fd 0
+    // directly since this is a one-shot process, not an interactive stream.
+    const { readFileSync } = await import('fs');
+    const { captureCommit } = await import('./git-capture.js');
+    const input = readFileSync(0, 'utf-8');
+    await captureCommit(input);
     process.exit(0);
   }
 
