@@ -164,9 +164,9 @@ invisible to teammates, and it writes into the user's repository.
 
 ## Migration
 
-- `~/.engram/default.db` is renamed to `~/.engram/global.db` at startup if `global.db`
-  does not exist. Every existing memory becomes global and keeps surfacing everywhere,
-  which is exactly the current behaviour.
+- No migration from `~/.engram/default.db`. Pre-fork installs are treated as version 0 —
+  no backward compatibility is maintained across this redesign. Users on the old single
+  vault start fresh with `~/.engram/global.db` / `~/.engram/projects/<slug>.db`.
 - Adding `profile` requires a full SQLite table rebuild, because `memories.type` carries
   `CHECK(type IN ('episodic','semantic','procedural'))` and SQLite cannot alter a CHECK
   constraint. Since the rebuild is unavoidable, the constraint is **dropped** rather than
@@ -211,7 +211,7 @@ single-store and unmodified; it is 2,700 lines and there is no reason for it to 
 about scope.
 
 - **Plan 1 — storage:** table rebuild and `profile`, project resolution, `MemoryRouter`,
-  the `default.db` rename, `engram_move`, cross-store `connect` error, FTS5/BM25 + RRF.
+  `engram_move`, cross-store `connect` error, FTS5/BM25 + RRF.
 - **Plan 2 — surface:** required `scope` across MCP and REST, scope labelling and the
   precedence footer, `SKILL.md`, the `PostToolUse` git hook, docs.
 - **Plan 3 — retrieval quality:** per-field embeddings, an extraction reflection pass, and

@@ -16,7 +16,6 @@ import {
   type MemoryScope,
   resolveVaultPath,
   isSingleStoreMode,
-  migrateLegacyVault,
 } from './config.js';
 import type { Memory, Edge, Entity, RememberInput, RecallInput, ConsolidationReport } from './types.js';
 
@@ -39,7 +38,6 @@ export class MemoryRouter {
 
   /** Build a router from the environment. */
   static open(cwd?: string): MemoryRouter {
-    migrateLegacyVault();
     const embedder = createEmbedder();
     const globalVault = new Vault(
       { owner: 'global', dbPath: resolveVaultPath('global', cwd) },
