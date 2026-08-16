@@ -221,3 +221,26 @@ export function resolveVaultPath(scope: MemoryScope, cwd?: string): string {
     ? join(homedir(), '.engram', 'global.db')
     : join(homedir(), '.engram', 'projects', `${resolveProject(cwd)}.db`);
 }
+
+/**
+ * One-time rename of the pre-fork shared vault into the global slot.
+ * Refuses to clobber an existing global.db. WAL and SHM sidecars follow the
+ * main file so an unclean shutdown does not lose committed pages.
+ */
+export function migrateLegacyVault(
+  engramDir: string = join(homedir(), '.engram'),
+): 'renamed' | 'skipped' {
+  const legacy = join(engramDir, 'default.db');
+  const target = join(engramDir, 'global.db');
+  if (!existsSync(legacy) || existsSync(target)) return 'skipped';
+
+  renameSync(legacy, target);
+  for (const suffix of ['-wal', '-shm']) {
+    if (existsSync(legacy + suffix)) renameSync(legacy + suffix, target + suffix);
+  }
+  console.warn(
+    `[engram] Migrated ${legacy} → ${target}. Your existing memories are now global ` +
+    'and will surface in every project.',
+  );
+  return 'renamed';
+}
