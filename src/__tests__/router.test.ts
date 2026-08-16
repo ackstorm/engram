@@ -212,3 +212,36 @@ describe('connect', () => {
     expect(() => router.connect(g.id, p.id, 'supports')).toThrow(/engram_move/);
   });
 });
+
+describe('MemoryRouter.open requires an embedder', () => {
+  const KEYS = ['MODEL_PROVIDER', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ENGRAM_ALLOW_NO_EMBEDDER', 'ENGRAM_DB_PATH'];
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = {};
+    for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]!;
+    }
+  });
+
+  it('refuses to open with no embedding provider', () => {
+    expect(() => MemoryRouter.open()).toThrow(/MODEL_PROVIDER/);
+    expect(() => MemoryRouter.open()).toThrow(/keyword-only/);
+  });
+
+  it('opens anyway when keyword-only is explicitly accepted', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'engram-noembed-'));
+    process.env.ENGRAM_ALLOW_NO_EMBEDDER = '1';
+    process.env.ENGRAM_DB_PATH = join(d, 'single.db');
+    try {
+      const r = MemoryRouter.open();
+      expect(r).toBeDefined();
+      await r.close();
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});

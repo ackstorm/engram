@@ -2290,8 +2290,15 @@ Status: "active" for current facts, "pending" for commitments not yet fulfilled.
       }
     }
 
-    // Seed from context keywords
-    this.keywordSearch(context, candidates);
+    // Seed from context keywords. Uses the same BM25 path as recall() — this
+    // deliberately no longer calls keywordSearch(), whose flat per-hit score
+    // had no IDF and no length normalisation, so proactive surfacing was
+    // running on a weaker lexical signal than recall was.
+    const surfaceTerms = tokenizeQuery(context).length;
+    for (const [id, norm] of normaliseBm25(this.store.searchBM25(context, 30), surfaceTerms)) {
+      const mem = this.store.getMemoryDirect(id);
+      if (mem) this.addCandidate(candidates, mem, norm * 0.4);
+    }
 
     // Seed from semantic search if available
     if (this.embedder && this.store.hasVectorSearch()) {

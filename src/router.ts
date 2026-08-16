@@ -42,6 +42,24 @@ export class MemoryRouter {
   /** Build a router from the environment. */
   static open(cwd?: string): MemoryRouter {
     const embedder = createEmbedder();
+
+    // Embeddings are required. Measured on eval/retrieval.ts, dropping to the
+    // keyword-only path takes recall@1 from 68% to 36%, and semantic queries —
+    // the ones a memory system exists to answer — from 50% to 12.5%. A vault
+    // built without an embedder also cannot be given one later without
+    // re-embedding, since the dimension is fixed on first write.
+    //
+    // Opt out deliberately with ENGRAM_ALLOW_NO_EMBEDDER=1; failing silently
+    // into a much weaker system is the thing worth preventing.
+    if (!embedder && process.env.ENGRAM_ALLOW_NO_EMBEDDER !== '1') {
+      throw new Error(
+        '[engram] No embedding provider configured, so recall would fall back to ' +
+        'keyword-only search (roughly half the accuracy). Set MODEL_PROVIDER to ' +
+        "'openai' or 'gemini' with the matching API key, or set " +
+        'ENGRAM_ALLOW_NO_EMBEDDER=1 to accept keyword-only retrieval.',
+      );
+    }
+
     const llm = resolveLlmConfig();
     const globalVault = new Vault(
       { owner: 'global', dbPath: resolveVaultPath('global', cwd), ...(llm ? { llm } : {}) },

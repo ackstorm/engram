@@ -287,6 +287,11 @@ export class MemoryStore {
         this.db.exec(
           `INSERT OR REPLACE INTO engram_meta (key, value) VALUES ('schema_version', '2')`,
         );
+        // Rebuilding `memories` reassigns every rowid, and the FTS index is an
+        // external-content table keyed on them. Clearing the marker forces the
+        // index to be rebuilt below; without this a future migration would
+        // leave it silently pointing at the wrong rows.
+        this.db.exec(`DELETE FROM engram_meta WHERE key = 'fts_built'`);
         this.db.exec('COMMIT');
       } catch (err) {
         this.db.exec('ROLLBACK');
