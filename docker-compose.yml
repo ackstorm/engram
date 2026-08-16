@@ -15,21 +15,44 @@ services:
       ENGRAM_MCP_PORT: 3801
       ENGRAM_AUTH_TOKEN: ${ENGRAM_AUTH_TOKEN:?set ENGRAM_AUTH_TOKEN in .env}
 
-      # --- Embeddings ----------------------------------------
-      MODEL_PROVIDER: ${MODEL_PROVIDER:-gemini}
+      # --- Embeddings (required) ------------------------------
+      # Without an embedder Engram falls back to keyword-only search, which is
+      # a much weaker system than the one described in the README. Treat these
+      # as mandatory, not optional.
+      #
+      # OPENAI_BASE_URL must be the API ROOT, not the versioned path — Engram
+      # appends /v1/embeddings itself. "https://host/v1" yields /v1/v1/... and
+      # 404s. Most other tools want the /v1 form, so this one differs.
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # ENGRAM_EMBEDDING_MODEL / ENGRAM_EMBEDDING_DIMS: set both together, and
-      # only on a fresh vault — the dimension is baked into the database.
-      ENGRAM_EMBEDDING_MODEL: ${ENGRAM_EMBEDDING_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env — embeddings are required}
+      ENGRAM_EMBEDDING_MODEL: ${ENGRAM_EMBEDDING_MODEL:-text-embedding-3-small}
+      # Leave ENGRAM_EMBEDDING_DIMS unset unless your model is non-standard.
+      # text-embedding-3-small is 1536, which is already the default for this
+      # provider — and setting it explicitly makes Engram send a `dimensions`
+      # parameter that some OpenAI-compatible gateways reject.
+      #
+      # The dimension is baked into the vault schema on first write. Changing
+      # the model or provider later is rejected at startup: see
+      # docs/references/embedding-config-is-immutable.md
       ENGRAM_EMBEDDING_DIMS: ${ENGRAM_EMBEDDING_DIMS:-}
 
       # --- LLM ------------------------------------------------
-      # There is no built-in default model; it is pinned here on purpose.
-      ENGRAM_LLM_PROVIDER: gemini
-      ENGRAM_LLM_MODEL: gemini-flash-latest
-      ENGRAM_LLM_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      # There is deliberately no built-in default model — an unset model is a
+      # startup error rather than a guess. Set it in .env.
+      #
+      # The OpenAI-compatible route reaches every model a LiteLLM-style gateway
+      # exposes, including proxied Gemini ones, so a single provider and base
+      # URL normally covers both embeddings and chat. Use ENGRAM_LLM_PROVIDER=
+      # gemini only for Google's native endpoint.
+      ENGRAM_LLM_PROVIDER: ${ENGRAM_LLM_PROVIDER:-openai}
+      ENGRAM_LLM_MODEL: ${ENGRAM_LLM_MODEL:?set ENGRAM_LLM_MODEL in .env — there is no default}
+      ENGRAM_LLM_API_KEY: ${ENGRAM_LLM_API_KEY:?set ENGRAM_LLM_API_KEY in .env}
+      # Root URL for the chat route. Leave unset for api.openai.com.
+      ENGRAM_LLM_BASE_URL: ${ENGRAM_LLM_BASE_URL:-}
+
+      # Only used when ENGRAM_LLM_PROVIDER=gemini.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_GEMINI_BASE_URL: ${GOOGLE_GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}
 
       # --- Access ---------------------------------------------
