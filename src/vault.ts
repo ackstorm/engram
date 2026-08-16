@@ -47,6 +47,25 @@ async function withRetry<T>(
 }
 
 // ============================================================
+// Reciprocal Rank Fusion
+// ============================================================
+
+/**
+ * Reciprocal Rank Fusion (Cormack et al., 2009): score = Σ 1/(k + rank).
+ * Combines rankings whose scores are not on a common scale — which is exactly
+ * the case for cosine similarity and BM25. k=60 is the standard constant.
+ */
+function rrf(rankings: string[][], k = 60): Map<string, number> {
+  const fused = new Map<string, number>();
+  for (const ranking of rankings) {
+    ranking.forEach((id, index) => {
+      fused.set(id, (fused.get(id) ?? 0) + 1 / (k + index + 1));
+    });
+  }
+  return fused;
+}
+
+// ============================================================
 // Vault — The public API for Engram
 // ============================================================
 
@@ -660,32 +679,30 @@ If nothing: {"insights": []}`;
     // because common entities (e.g. "Thomas" in 100+ memories)
     // flood the candidate pool with noise if scored too high.
 
-    // 1. Semantic search via embeddings (PRIMARY — highest signal)
+    // 1. Vector search (semantic) and BM25 (lexical), fused via Reciprocal
+    // Rank Fusion — see the `rrf()` helper above. Cosine similarity and BM25
+    // are not on a comparable scale, so ranks are fused rather than scores.
+    // The fused value is scaled up to the historical 0-1 "primary signal"
+    // range so it still outweighs the secondary entity/topic boosts below,
+    // matching the original design intent (vector/keyword = primary retriever).
+    let vectorIds: string[] = [];
     if (this.embedder && this.store.hasVectorSearch()) {
       try {
         const queryEmbedding = await this.embedder.embed(parsed.context);
-        const vectorResults = this.store.searchByVector(queryEmbedding, 50);
-        for (const vr of vectorResults) {
-          const mem = this.store.getMemoryDirect(vr.memoryId);
-          if (mem) {
-            // Use cosine similarity (1 - distance) as primary score
-            const similarity = Math.max(0, 1 - vr.distance);
-            this.addCandidate(candidates, mem, similarity);
-          }
-        }
+        vectorIds = this.store.searchByVector(queryEmbedding, 50).map(vr => vr.memoryId);
       } catch (err) {
-        // Vector search failed — keyword search becomes primary
-        this.keywordSearch(parsed.context, candidates, 0.4);
+        // Vector search failed — BM25 alone still contributes below.
       }
-    } else {
-      // No embeddings available — keyword is primary
-      this.keywordSearch(parsed.context, candidates, 0.4);
     }
-
-    // 1b. Keyword search (ALWAYS runs as supplementary signal)
-    // Catches exact term matches that embeddings might miss —
-    // e.g. "competitors" in a query matching "competitors" in content.
-    this.keywordSearch(parsed.context, candidates, 0.2);
+    const bm25Ids = this.store.searchBM25(parsed.context, 50).map(h => h.id);
+    const fused = rrf([vectorIds, bm25Ids]);
+    if (fused.size > 0) {
+      const maxFused = Math.max(...fused.values());
+      for (const [id, score] of fused) {
+        const mem = this.store.getMemoryDirect(id);
+        if (mem) this.addCandidate(candidates, mem, (score / maxFused) * 0.6);
+      }
+    }
 
     // 2. Entity-based retrieval (SECONDARY — boost, not flood)
     // Pull more candidates for entity matches but weight by type:

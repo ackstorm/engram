@@ -266,6 +266,43 @@ export class MemoryStore {
         this.db.exec('PRAGMA foreign_keys = ON');
       }
     }
+
+    // ── Full-text index (FTS5 + BM25, built into Node's SQLite) ──
+    // External-content table: memories owns the rows, the index mirrors them.
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+        content, summary, entities, topics,
+        content='memories', content_rowid='rowid', tokenize='porter unicode61'
+      );
+
+      CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, content, summary, entities, topics)
+        VALUES (new.rowid, new.content, new.summary, new.entities, new.topics);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS memories_fts_ad AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content, summary, entities, topics)
+        VALUES ('delete', old.rowid, old.content, old.summary, old.entities, old.topics);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content, summary, entities, topics)
+        VALUES ('delete', old.rowid, old.content, old.summary, old.entities, old.topics);
+        INSERT INTO memories_fts(rowid, content, summary, entities, topics)
+        VALUES (new.rowid, new.content, new.summary, new.entities, new.topics);
+      END;
+    `);
+
+    // Backfill once for vaults that predate the index.
+    const ftsBuilt = this.db
+      .prepare(`SELECT value FROM engram_meta WHERE key = 'fts_built'`)
+      .get() as { value: string } | undefined;
+    if (!ftsBuilt) {
+      this.db.exec(`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`);
+      this.db
+        .prepare(`INSERT OR REPLACE INTO engram_meta (key, value) VALUES ('fts_built', '1')`)
+        .run();
+    }
   }
 
   /** Embedding dimension this vault was built with; 0 when it has no vectors. */
@@ -746,6 +783,35 @@ export class MemoryStore {
   /** Check if vector search is available */
   hasVectorSearch(): boolean {
     return this.vecEnabled;
+  }
+
+  /**
+   * Lexical search over the FTS5 index. `bm25()` returns lower-is-better, so
+   * the sign is flipped for consistency with every other score in the system.
+   * The query is tokenised into bare terms — FTS5 operators in user text would
+   * otherwise be a syntax error rather than a search.
+   */
+  searchBM25(query: string, limit: number = 20): Array<{ id: string; score: number }> {
+    const terms = query
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .split(/\s+/)
+      .filter(t => t.length > 1);
+    if (terms.length === 0) return [];
+
+    const match = terms.map(t => `"${t}"`).join(' OR ');
+    try {
+      return this.db.prepare(`
+        SELECT m.id AS id, -bm25(memories_fts, 4.0, 2.0, 1.0, 1.0) AS score
+        FROM memories_fts
+        JOIN memories m ON m.rowid = memories_fts.rowid
+        WHERE memories_fts MATCH ?
+        ORDER BY score DESC
+        LIMIT ?
+      `).all(match, limit) as Array<{ id: string; score: number }>;
+    } catch {
+      return []; // never let a search syntax problem break recall
+    }
   }
 
   /** Get the stored embedding for a memory (for dedup checks) */
