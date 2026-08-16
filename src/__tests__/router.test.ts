@@ -122,6 +122,14 @@ describe('move', () => {
     expect(router.move(a.id, 'global').edgesDropped).toBe(1);
   });
 
+  it('counts every edge, not just distinct neighbors', () => {
+    const a = router.remember('project', { content: 'memory A for multi-edge' });
+    const b = router.remember('project', { content: 'memory B for multi-edge' });
+    router.connect(a.id, b.id, 'supports', 0.6);
+    router.connect(a.id, b.id, 'reinforces', 0.4);
+    expect(router.move(a.id, 'global').edgesDropped).toBe(2);
+  });
+
   it('is a no-op when the memory is already in the target scope', () => {
     const m = router.remember('global', { content: 'already global' });
     expect(router.move(m.id, 'global')).toEqual({ moved: false, from: 'global', edgesDropped: 0 });

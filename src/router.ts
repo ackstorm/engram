@@ -158,9 +158,11 @@ export class MemoryRouter {
     options?: { since?: string | Date; all?: boolean },
   ): Promise<Record<MemoryScope, ConsolidationReport | null>> {
     const out: Record<string, ConsolidationReport | null> = { global: null, project: null };
-    for (const { scope, vault } of this.stores()) {
-      out[scope] = await vault.consolidate(options);
-    }
+    await Promise.all(
+      this.stores().map(async ({ scope, vault }) => {
+        out[scope] = await vault.consolidate(options);
+      }),
+    );
     return out as Record<MemoryScope, ConsolidationReport | null>;
   }
 
@@ -201,7 +203,7 @@ export class MemoryRouter {
     }
 
     const source = this.vaultFor(found.scope);
-    const edgesDropped = source.neighbors(id, 1).length;
+    const edgesDropped = source.edgeCount(id);
     const { scope: _drop, ...memory } = found;
 
     const destination = this.vaultFor(to);

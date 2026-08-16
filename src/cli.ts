@@ -799,7 +799,7 @@ async function runShadow(subcommand: string, values: Record<string, unknown>) {
                 const stats = await res.json() as any;
                 console.log(`\n   📊 Vault Stats:`);
                 console.log(`      Total memories: ${stats.total}`);
-                console.log(`      Semantic: ${stats.semantic} | Episodic: ${stats.episodic} | Procedural: ${stats.procedural}`);
+                console.log(`      Semantic: ${stats.semantic} | Episodic: ${stats.episodic} | Procedural: ${stats.procedural} | Profile: ${stats.profile}`);
                 console.log(`      Entities: ${stats.entities}`);
                 break;
               }
@@ -947,7 +947,7 @@ async function runDoctor(values: Record<string, unknown>) {
   const engramDir = join(home, '.engram');
   const owner = (values.owner as string) || 'default';
   const dbPath = join(engramDir, `${owner}.db`);
-  let vaultStats: { total: number; entities: number; episodic?: number; semantic?: number; procedural?: number } | null = null;
+  let vaultStats: { total: number; entities: number; episodic?: number; semantic?: number; procedural?: number; profile?: number } | null = null;
   try {
     const vault = new Vault({ owner, dbPath });
     vaultStats = vault.stats();
@@ -1022,6 +1022,7 @@ async function runDoctor(values: Record<string, unknown>) {
       `${vaultStats.episodic ?? 0} episodic`,
       `${vaultStats.semantic ?? 0} semantic`,
       `${vaultStats.procedural ?? 0} procedural`,
+      `${vaultStats.profile ?? 0} profile`,
       `${vaultStats.entities ?? 0} entities`,
     ];
     check(true, 'Vault stats', parts.join(', '));
@@ -1241,6 +1242,7 @@ Engram has no limit, semantic search, and cross-project intelligence.
           console.log(`  Episodic:        ${stats.episodic}`);
           console.log(`  Semantic:        ${stats.semantic}`);
           console.log(`  Procedural:      ${stats.procedural}`);
+          console.log(`  Profile:         ${stats.profile}`);
           console.log(`  Entities:        ${stats.entities}`);
           console.log();
         }
@@ -1495,7 +1497,7 @@ async function repl(vault: Vault, jsonMode: boolean) {
           case 'stats':
           case 's':
             const stats = vault.stats();
-            console.log(`Total: ${stats.total} | Episodic: ${stats.episodic} | Semantic: ${stats.semantic} | Procedural: ${stats.procedural} | Entities: ${stats.entities}`);
+            console.log(`Total: ${stats.total} | Episodic: ${stats.episodic} | Semantic: ${stats.semantic} | Procedural: ${stats.procedural} | Profile: ${stats.profile} | Entities: ${stats.entities}`);
             break;
 
           case 'entities':

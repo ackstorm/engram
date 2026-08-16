@@ -128,7 +128,7 @@ server.tool(
   'Store a memory. Call this PROACTIVELY — do not wait to be asked. Store when: (1) the user shares a preference, fact, decision, or personal detail, (2) you read or synthesize useful knowledge from files, docs, or context (style guides, architecture patterns, workflow rules), (3) you learn HOW the user works (communication style, review patterns, tool preferences), (4) the user corrects you or clarifies something. If knowledge would be useful in a future session, store it NOW.',
   {
     content: z.string().describe('The memory content — a clear statement worth remembering'),
-    type: z.enum(['episodic', 'semantic', 'procedural']).optional().describe('Memory type: episodic (events), semantic (facts), procedural (how-to)'),
+    type: z.enum(['episodic', 'semantic', 'procedural', 'profile']).optional().describe('Memory type: episodic (events), semantic (facts), procedural (how-to), profile (stable user traits/preferences)'),
     entities: z.array(z.string()).optional().describe('People, projects, tools, places mentioned'),
     topics: z.array(z.string()).optional().describe('Topic tags'),
     salience: z.number().min(0).max(1).optional().describe('Importance 0-1 (default 0.5)'),

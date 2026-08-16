@@ -50,12 +50,15 @@ async function withRetry<T>(
 // Reciprocal Rank Fusion
 // ============================================================
 
+/** Standard RRF constant. Also defines the max possible fused score for N rankings: N / (RRF_K + 1). */
+const RRF_K = 60;
+
 /**
  * Reciprocal Rank Fusion (Cormack et al., 2009): score = Σ 1/(k + rank).
  * Combines rankings whose scores are not on a common scale — which is exactly
  * the case for cosine similarity and BM25. k=60 is the standard constant.
  */
-function rrf(rankings: string[][], k = 60): Map<string, number> {
+function rrf(rankings: string[][], k = RRF_K): Map<string, number> {
   const fused = new Map<string, number>();
   for (const ranking of rankings) {
     ranking.forEach((id, index) => {
@@ -685,6 +688,11 @@ If nothing: {"insights": []}`;
     // The fused value is scaled up to the historical 0-1 "primary signal"
     // range so it still outweighs the secondary entity/topic boosts below,
     // matching the original design intent (vector/keyword = primary retriever).
+    // Normalizing against the THEORETICAL max (both signals agreeing on rank 1),
+    // not the observed max, so a query with only one weak signal still scores
+    // lower than one where vector and BM25 agree — the observed max would
+    // otherwise always map the best available hit to full strength even when
+    // it's a poor match.
     let vectorIds: string[] = [];
     if (this.embedder && this.store.hasVectorSearch()) {
       try {
@@ -697,10 +705,11 @@ If nothing: {"insights": []}`;
     const bm25Ids = this.store.searchBM25(parsed.context, 50).map(h => h.id);
     const fused = rrf([vectorIds, bm25Ids]);
     if (fused.size > 0) {
-      const maxFused = Math.max(...fused.values());
-      for (const [id, score] of fused) {
-        const mem = this.store.getMemoryDirect(id);
-        if (mem) this.addCandidate(candidates, mem, (score / maxFused) * 0.6);
+      const maxPossibleFused = 2 / (RRF_K + 1);
+      const fusedMemories = this.store.getMemoriesDirect([...fused.keys()]);
+      for (const mem of fusedMemories) {
+        const score = fused.get(mem.id)!;
+        this.addCandidate(candidates, mem, Math.min(score / maxPossibleFused, 1) * 0.6);
       }
     }
 
@@ -1110,6 +1119,15 @@ If nothing: {"insights": []}`;
 
   neighbors(memoryId: string, depth: number = 1): Memory[] {
     return this.store.getNeighbors(memoryId, depth);
+  }
+
+  /**
+   * Count of edges touching a memory (both directions). Unlike neighbors(),
+   * this counts edges, not distinct neighbor memories, and does not touch
+   * access stats on the other end.
+   */
+  edgeCount(memoryId: string): number {
+    return this.store.getEdgesForMemories([memoryId]).length;
   }
 
   // --------------------------------------------------------

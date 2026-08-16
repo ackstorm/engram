@@ -508,7 +508,13 @@ export class MemoryStore {
   }
 
   deleteMemory(id: string): number {
+    const row = this.db.prepare('SELECT entities FROM memories WHERE id = ?').get(id) as { entities: string } | undefined;
     const result = this.db.prepare('DELETE FROM memories WHERE id = ?').run(id);
+    if (row && result.changes > 0) {
+      for (const entityName of JSON.parse(row.entities) as string[]) {
+        this.decrementEntity(entityName);
+      }
+    }
     return Number(result.changes);
   }
 
@@ -581,15 +587,16 @@ export class MemoryStore {
   }
 
   /** Count memories by type */
-  getStats(): { total: number; episodic: number; semantic: number; procedural: number; entities: number } {
+  getStats(): { total: number; episodic: number; semantic: number; procedural: number; profile: number; entities: number } {
     const counts = this.db.prepare(`
-      SELECT 
+      SELECT
         COUNT(*) as total,
         SUM(CASE WHEN type = 'episodic' THEN 1 ELSE 0 END) as episodic,
         SUM(CASE WHEN type = 'semantic' THEN 1 ELSE 0 END) as semantic,
-        SUM(CASE WHEN type = 'procedural' THEN 1 ELSE 0 END) as procedural
+        SUM(CASE WHEN type = 'procedural' THEN 1 ELSE 0 END) as procedural,
+        SUM(CASE WHEN type = 'profile' THEN 1 ELSE 0 END) as profile
       FROM memories
-    `).get() as unknown as { total: number; episodic: number; semantic: number; procedural: number };
+    `).get() as unknown as { total: number; episodic: number; semantic: number; procedural: number; profile: number };
 
     const entityCount = this.db.prepare('SELECT COUNT(*) as count FROM entities').get() as unknown as { count: number };
 
@@ -725,6 +732,18 @@ export class MemoryStore {
     `).run(id, name, type, now, now);
 
     return { id, name, type, aliases: [], properties: {}, firstSeen: now, lastSeen: now, memoryCount: 1, importance: 0.5 };
+  }
+
+  /** Mirror of upsertEntity's increment, for when a memory referencing this entity is deleted. */
+  private decrementEntity(name: string): void {
+    const existing = this.db.prepare(
+      'SELECT * FROM entities WHERE name = ? OR aliases LIKE ?'
+    ).get(name, `%"${name}"%`) as unknown as EntityRow | undefined;
+    if (!existing) return;
+
+    this.db.prepare(`
+      UPDATE entities SET memory_count = MAX(memory_count - 1, 0) WHERE id = ?
+    `).run(existing.id);
   }
 
   getEntity(name: string): Entity | null {

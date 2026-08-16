@@ -281,6 +281,16 @@ describe('Vault', () => {
       expect(stats.procedural).toBe(1);
     });
 
+    it('counts profile memories separately from the total', () => {
+      vault.remember({ content: 'Episodic 1', type: 'episodic' });
+      vault.remember({ content: 'Prefers dark mode', type: 'profile' });
+
+      const stats = vault.stats();
+      expect(stats.total).toBe(2);
+      expect(stats.profile).toBe(1);
+      expect(stats.episodic).toBe(1);
+    });
+
     it('counts entities', () => {
       vault.remember({ content: 'About React', entities: ['React'] });
       vault.remember({ content: 'About Next.js', entities: ['Next.js'] });
@@ -304,6 +314,15 @@ describe('Vault', () => {
       const thomas = entities.find(e => e.name === 'Thomas');
       expect(thomas).toBeTruthy();
       expect(thomas!.memoryCount).toBe(3);
+    });
+
+    it('decrements entity count when a referencing memory is hard-forgotten', () => {
+      const m1 = vault.remember({ content: 'Priya at work', entities: ['Priya'] });
+      vault.remember({ content: 'Priya coding', entities: ['Priya'] });
+      expect(vault.entities().find(e => e.name === 'Priya')!.memoryCount).toBe(2);
+
+      vault.forget(m1.id, true);
+      expect(vault.entities().find(e => e.name === 'Priya')!.memoryCount).toBe(1);
     });
   });
 

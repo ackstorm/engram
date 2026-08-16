@@ -205,17 +205,30 @@ export function resolveProject(cwd: string = process.cwd()): string {
 }
 
 /** True when both scopes collapse onto a single file (daemon / legacy layouts). */
-export function isSingleStoreMode(): boolean {
-  return !!(process.env.ENGRAM_DB_PATH?.trim() || process.env.ENGRAM_OWNER?.trim());
-}
-
-/** Absolute path to the vault backing a given scope. */
-export function resolveVaultPath(scope: MemoryScope, cwd?: string): string {
+/**
+ * The single-file path both scopes collapse onto (ENGRAM_DB_PATH or
+ * ENGRAM_OWNER), or null when neither override is set. Single source of
+ * truth for the ENGRAM_DB_PATH/ENGRAM_OWNER precedence — isSingleStoreMode
+ * and resolveVaultPath both derive from it so they can't drift apart.
+ */
+function singleStoreOverridePath(): string | null {
   const explicitPath = process.env.ENGRAM_DB_PATH?.trim();
   if (explicitPath) return explicitPath;
 
   const owner = process.env.ENGRAM_OWNER?.trim();
   if (owner) return join(homedir(), '.engram', `${owner}.db`);
+
+  return null;
+}
+
+export function isSingleStoreMode(): boolean {
+  return singleStoreOverridePath() !== null;
+}
+
+/** Absolute path to the vault backing a given scope. */
+export function resolveVaultPath(scope: MemoryScope, cwd?: string): string {
+  const override = singleStoreOverridePath();
+  if (override) return override;
 
   return scope === 'global'
     ? join(homedir(), '.engram', 'global.db')
