@@ -348,6 +348,46 @@ export class MemoryStore {
     return memory;
   }
 
+  /**
+   * Insert a fully-formed memory verbatim, preserving its own id and
+   * timestamps rather than generating new ones. Used by MemoryRouter.move to
+   * re-home a memory into another store. The embedding vector is handled
+   * separately (it lives in vec_memories, not this table).
+   */
+  insertMemoryVerbatim(memory: Memory): void {
+    this.db.prepare(`
+      INSERT INTO memories (
+        id, type, content, summary,
+        source_type, source_session_id, source_agent_id, source_evidence, source_timestamp,
+        created_at, last_accessed_at, last_modified_at, access_count, expires_at,
+        valid_from, valid_until,
+        salience, confidence, stability,
+        entities, topics, status, visibility, scope
+      ) VALUES (
+        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?, ?
+      )
+    `).run(
+      memory.id, memory.type, memory.content, memory.summary,
+      memory.source.type, memory.source.sessionId ?? null, memory.source.agentId ?? null,
+      JSON.stringify(memory.source.evidence ?? []), memory.source.timestamp,
+      memory.createdAt, memory.lastAccessedAt, memory.lastModifiedAt,
+      memory.accessCount, memory.expiresAt ?? null,
+      memory.validFrom ?? memory.createdAt, memory.validUntil ?? null,
+      memory.salience, memory.confidence, memory.stability,
+      JSON.stringify(memory.entities), JSON.stringify(memory.topics), memory.status, memory.visibility,
+      memory.scope ?? 'both',
+    );
+
+    for (const entityName of memory.entities) {
+      this.upsertEntity(entityName, memory.type === 'episodic' ? 'unknown' : 'concept');
+    }
+  }
+
   getMemory(id: string): Memory | null {
     const row = this.db.prepare('SELECT * FROM memories WHERE id = ?').get(id) as unknown as MemoryRow | undefined;
     if (!row) return null;

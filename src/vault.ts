@@ -502,6 +502,21 @@ If nothing: {"insights": []}`;
     this.store.storeEmbedding(memoryId, embedding);
   }
 
+  /** Read the raw embedding vector for a memory, if any. */
+  getEmbeddingVector(memoryId: string): number[] | null {
+    return this.store.getEmbedding(memoryId);
+  }
+
+  /** Write a raw embedding vector for a memory, without recomputing it. */
+  storeEmbeddingVector(memoryId: string, embedding: number[]): void {
+    this.store.storeEmbedding(memoryId, embedding);
+  }
+
+  /** Insert a fully-formed memory verbatim, preserving id. */
+  importMemory(memory: Memory): void {
+    this.store.insertMemoryVerbatim(memory);
+  }
+
   /** Batch compute embeddings for all memories missing them */
   async backfillEmbeddings(): Promise<number> {
     if (!this.embedder) return 0;

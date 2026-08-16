@@ -102,3 +102,48 @@ describe('stats and entities', () => {
     expect(marta!.memoryCount).toBe(2);
   });
 });
+
+describe('move', () => {
+  it('moves a memory between stores, preserving id and content', () => {
+    const m = router.remember('project', { content: 'Prefers TypeScript everywhere', type: 'profile' });
+    const result = router.move(m.id, 'global');
+    expect(result.moved).toBe(true);
+    expect(result.from).toBe('project');
+    const found = router.getById(m.id);
+    expect(found?.scope).toBe('global');
+    expect(found?.id).toBe(m.id);
+    expect(found?.content).toBe('Prefers TypeScript everywhere');
+  });
+
+  it('reports how many edges were dropped', () => {
+    const a = router.remember('project', { content: 'memory A for edges' });
+    const b = router.remember('project', { content: 'memory B for edges' });
+    router.connect(a.id, b.id, 'supports', 0.6);
+    expect(router.move(a.id, 'global').edgesDropped).toBe(1);
+  });
+
+  it('is a no-op when the memory is already in the target scope', () => {
+    const m = router.remember('global', { content: 'already global' });
+    expect(router.move(m.id, 'global')).toEqual({ moved: false, from: 'global', edgesDropped: 0 });
+  });
+
+  it('reports not-moved for an unknown id', () => {
+    expect(router.move('m_nope', 'global').moved).toBe(false);
+  });
+});
+
+describe('connect', () => {
+  it('connects two memories in the same store', () => {
+    const a = router.remember('project', { content: 'same store A' });
+    const b = router.remember('project', { content: 'same store B' });
+    expect(router.connect(a.id, b.id, 'supports').sourceId).toBe(a.id);
+  });
+
+  it('refuses to connect across stores, naming both scopes', () => {
+    const g = router.remember('global', { content: 'a global memory' });
+    const p = router.remember('project', { content: 'a project memory' });
+    expect(() => router.connect(g.id, p.id, 'supports')).toThrow(/global/);
+    expect(() => router.connect(g.id, p.id, 'supports')).toThrow(/project/);
+    expect(() => router.connect(g.id, p.id, 'supports')).toThrow(/engram_move/);
+  });
+});

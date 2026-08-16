@@ -18,7 +18,7 @@ import {
   isSingleStoreMode,
   migrateLegacyVault,
 } from './config.js';
-import type { Memory, Entity, RememberInput, RecallInput, ConsolidationReport } from './types.js';
+import type { Memory, Edge, Entity, RememberInput, RecallInput, ConsolidationReport } from './types.js';
 
 // Memory.scope is a vestigial, disjoint field ('local'|'hosted'|'both') left over
 // from the old routing design — unrelated to MemoryScope. Omit it so the two
@@ -166,5 +166,50 @@ export class MemoryRouter {
 
   async close(): Promise<void> {
     for (const { vault } of this.stores()) await vault.close();
+  }
+
+  /**
+   * Edges are foreign keys within one file, so a cross-store edge is rejected
+   * by SQLite itself. Fail earlier, with a message the agent can act on.
+   */
+  connect(sourceId: string, targetId: string, type: Edge['type'], strength = 0.5): Edge {
+    const source = this.getById(sourceId);
+    const target = this.getById(targetId);
+    if (!source) throw new Error(`[engram] No memory found for sourceId "${sourceId}".`);
+    if (!target) throw new Error(`[engram] No memory found for targetId "${targetId}".`);
+    if (source.scope !== target.scope) {
+      throw new Error(
+        `[engram] Cannot connect across scopes: "${sourceId}" is ${source.scope} and ` +
+        `"${targetId}" is ${target.scope}. Edges cannot span vaults. Use engram_move to ` +
+        'bring one into the other scope first.',
+      );
+    }
+    return this.vaultFor(source.scope).connect(sourceId, targetId, type, strength);
+  }
+
+  /**
+   * Re-home a memory. Both stores share one embedding configuration, so the
+   * stored vector stays valid and is carried across as-is rather than
+   * recomputed. Edges cannot follow — their other end may not be moving — so
+   * they are dropped and counted.
+   */
+  move(id: string, to: MemoryScope): { moved: boolean; from?: MemoryScope; edgesDropped: number } {
+    const found = this.getById(id);
+    if (!found) return { moved: false, edgesDropped: 0 };
+    if (found.scope === to || !this.projectVault) {
+      return { moved: false, from: found.scope, edgesDropped: 0 };
+    }
+
+    const source = this.vaultFor(found.scope);
+    const edgesDropped = source.neighbors(id, 1).length;
+    const { scope: _drop, ...memory } = found;
+
+    const destination = this.vaultFor(to);
+    destination.importMemory(memory as Memory);
+    const vector = source.getEmbeddingVector(id);
+    if (vector) destination.storeEmbeddingVector(id, vector);
+    source.forget(id, true);
+
+    return { moved: true, from: found.scope, edgesDropped };
   }
 }
