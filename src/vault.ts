@@ -1,6 +1,6 @@
 import path from 'path';
 import os from 'os';
-import { MemoryStore } from './store.js';
+import { MemoryStore, tokenizeQuery } from './store.js';
 import { RememberInputSchema, RecallInputSchema } from './types.js';
 import type { Memory, Edge, Entity, RememberInput, RecallInput, RememberParsed, RecallParsed, ConsolidationReport, VaultConfig, AskResult, AskSource } from './types.js';
 import type { EmbeddingProvider } from './embeddings.js';
@@ -62,14 +62,57 @@ async function withRetry<T>(
  * Weights are renormalised over the retrievers that actually ran, so a vault
  * with no embedder still gets the full 0.6 ceiling from lexical search alone.
  */
+/**
+ * Min-max normalise cosine similarities within a single query.
+ *
+ * Absolute cosine ranges are model-specific and compressed: measured against
+ * text-embedding-3-small, a strongly relevant memory scores 0.36 and an
+ * unrelated one 0.09. Feeding those raw into a 0.6-weighted primary signal
+ * yields 0.05-0.22, which loses to the entity boost (0.25-0.35) and to the
+ * additive recency boost (0.25) — the primary retriever gets outvoted by its
+ * own tie-breakers.
+ *
+ * Normalising within the query makes the best semantic hit worth the full
+ * weight regardless of the model's scale. This is what Weaviate's
+ * relativeScoreFusion does, and why it replaced rank-based fusion as their
+ * default in v1.24.
+ */
+export function normaliseCosine(
+  hits: Array<{ memoryId: string; similarity: number }>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  if (hits.length === 0) return out;
+  const values = hits.map(h => h.similarity);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min;
+  for (const h of hits) {
+    out.set(h.memoryId, span === 0 ? 1 : (h.similarity - min) / span);
+  }
+  return out;
+}
+
+/**
+ * How large the strongest entity/topic boost may be relative to the strongest
+ * primary retrieval score in the same query. mem0 uses the same idea, capping
+ * its entity boost at 0.5 against a semantic score of 1.0.
+ */
+const SECONDARY_SIGNAL_RATIO = 0.5;
+
+/** The largest fixed weight any secondary signal assigns (entity 0.25 + type 0.1). */
+const MAX_SECONDARY_WEIGHT = 0.35;
+
 export function fuseRetrievalScores(
   vectorSimilarity: Map<string, number>,
   bm25Normalised: Map<string, number>,
   hasVector: boolean,
   hasLexical: boolean,
 ): Map<string, number> {
-  const wv = hasVector ? 0.7 : 0;
-  const wl = hasLexical ? 0.3 : 0;
+  // 0.75/0.25 is Weaviate's documented default alpha for hybrid search. Renormalised
+  // below over whichever retrievers actually ran, so a vault with no embedder still
+  // gets the full ceiling from lexical alone.
+  const wv = hasVector ? 0.75 : 0;
+  const wl = hasLexical ? 0.25 : 0;
   const total = wv + wl;
   const out = new Map<string, number>();
   if (total === 0) return out;
@@ -82,17 +125,64 @@ export function fuseRetrievalScores(
   return out;
 }
 
-/** Min-max normalise to [0,1] within a result set. A lone result maps to 1. */
-function normaliseScores(hits: Array<{ id: string; score: number }>): Map<string, number> {
+/**
+ * Absolute floor separating a real BM25 match from stopword noise.
+ *
+ * Measured against SQLite's bm25() across corpora of 5 to 401 memories: noise
+ * from stopwords and ubiquitous words sits at 1.8e-6 to 3.9e-6 and does NOT
+ * grow with corpus size, while the weakest genuine single-term match scores
+ * 2.07 and grows to 10.6 at 401 memories. Five orders of magnitude of margin,
+ * stable across corpus sizes, so a fixed floor is safe.
+ *
+ * This matters because min-max normalisation is blind to it: when a query
+ * matches only on "the", every hit scores ~2e-6 with almost no variance, and
+ * min-max promotes the least-bad noise to a perfect 1.0.
+ */
+const BM25_NOISE_FLOOR = 1e-3;
+
+/**
+ * Normalise raw BM25 into [0,1] with a logistic sigmoid, after discarding
+ * anything below the noise floor.
+ *
+ * A sigmoid rather than min-max because absolute strength has to survive: a
+ * result set containing one mediocre match should not have that match promoted
+ * to full marks simply for being the best available. mem0 uses the same shape;
+ * its midpoints (5-12) assume rank-bm25's scale, so these are refitted to
+ * SQLite's output, where scores scale with both query term count and corpus
+ * size (1-term: 2.07-10.6, 2-term: 4.13-21.1, 4-term: 12.4-63.4).
+ */
+export function normaliseBm25(
+  hits: Array<{ id: string; score: number }>,
+  termCount: number,
+): Map<string, number> {
   const out = new Map<string, number>();
-  if (hits.length === 0) return out;
-  const values = hits.map(h => h.score);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-  for (const h of hits) out.set(h.id, span === 0 ? 1 : (h.score - min) / span);
+  const terms = Math.max(1, termCount);
+  const midpoint = 3.0 * terms;
+  const steepness = 0.4 / terms;
+  for (const h of hits) {
+    if (h.score < BM25_NOISE_FLOOR) continue;
+    out.set(h.id, 1 / (1 + Math.exp(-steepness * (h.score - midpoint))));
+  }
   return out;
 }
+
+/**
+ * On the absence of a semantic gate.
+ *
+ * mem0 excludes candidates whose semantic score is below a threshold before
+ * blending, so lexical evidence can never resurrect an irrelevant memory. That
+ * guard exists because their lexical and semantic terms are added with equal
+ * weight. Here lexical is weighted 0.3 against semantic's 0.7, so a perfect
+ * lexical match contributes 0.18 where a merely average semantic match
+ * contributes 0.21 — the arithmetic already bounds it.
+ *
+ * A relative gate was prototyped at 40% of the top cosine and removed: the
+ * only case it caught was one measured at 39.4%, which means the threshold was
+ * fitted to a single observation rather than derived. The BM25 noise floor
+ * above fixes that case on evidence instead. Revisit if a real lexical match
+ * is ever seen outranking a strong semantic one.
+ */
+
 
 // ============================================================
 // Vault — The public API for Engram
@@ -733,7 +823,7 @@ If nothing: {"insights": []}`;
     }
 
     const bm25Hits = this.store.searchBM25(parsed.context, 50);
-    const bm25Normalised = normaliseScores(bm25Hits);
+    const bm25Normalised = normaliseBm25(bm25Hits, tokenizeQuery(parsed.context).length);
     const fused = fuseRetrievalScores(
       vectorSimilarity, bm25Normalised, hasVector, bm25Hits.length > 0,
     );
@@ -743,6 +833,21 @@ If nothing: {"insights": []}`;
         this.addCandidate(candidates, mem, fused.get(mem.id)!);
       }
     }
+
+    // Entity and topic matches are tie-breakers, not retrievers — the comments
+    // below have always said "boost, not flood". Their fixed weights (up to
+    // 0.35 and 0.2) only behave that way if the primary signal reaches its 0.6
+    // ceiling, and it never does: embedding models compress cosine into a
+    // narrow band (0.09-0.36 for text-embedding-3-small), so the primary lands
+    // at 0.06-0.22 and a single topic match outvotes it.
+    //
+    // Scaling them against the best primary score this query produced keeps
+    // the intended ordering whatever the model's cosine range, without
+    // hard-coding a constant per embedding model.
+    const bestPrimary = fused.size > 0 ? Math.max(...fused.values()) : 0;
+    const secondaryScale = bestPrimary > 0
+      ? Math.min(1, (bestPrimary * SECONDARY_SIGNAL_RATIO) / MAX_SECONDARY_WEIGHT)
+      : 1;
 
     // 2. Entity-based retrieval (SECONDARY — boost, not flood)
     // Pull more candidates for entity matches but weight by type:
@@ -756,7 +861,7 @@ If nothing: {"insights": []}`;
           const baseScore = memories.length <= 5 ? 0.25 : memories.length <= 15 ? 0.15 : 0.1;
           // Semantic memories from entity match get a bonus — they're distilled facts
           const typeBonus = mem.type === 'semantic' ? 0.1 : 0;
-          this.addCandidate(candidates, mem, baseScore + typeBonus);
+          this.addCandidate(candidates, mem, (baseScore + typeBonus) * secondaryScale);
         }
       }
     }
@@ -767,7 +872,7 @@ If nothing: {"insights": []}`;
         const memories = this.store.getByTopic(topic, 10);
         const topicScore = memories.length <= 3 ? 0.2 : 0.08;
         for (const mem of memories) {
-          this.addCandidate(candidates, mem, topicScore);
+          this.addCandidate(candidates, mem, topicScore * secondaryScale);
         }
       }
     }

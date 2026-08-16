@@ -18,6 +18,22 @@ import type { Memory, Edge, Entity, RememberParsed } from './types.js';
  * Treating the raw L2 distance as a cosine distance understates similarity
  * badly: d=1.13 is cosine 0.36, but `1 - d` reads as -0.13.
  */
+/**
+ * Split a query into BM25 terms. Exported so the scorer can count terms without
+ * re-deriving them — a mismatch between what is searched and what is counted
+ * would silently mis-calibrate the score normalisation.
+ *
+ * Two-letter tokens are almost entirely stopwords ("is", "we", "do", "of").
+ * They match nearly every memory and contribute no IDF.
+ */
+export function tokenizeQuery(query: string): string[] {
+  return query
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter(t => t.length > 2);
+}
+
 export function cosineFromL2(distance: number): number {
   const cos = 1 - (distance * distance) / 2;
   return Math.max(-1, Math.min(1, cos));
@@ -824,11 +840,7 @@ export class MemoryStore {
    * otherwise be a syntax error rather than a search.
    */
   searchBM25(query: string, limit: number = 20): Array<{ id: string; score: number }> {
-    const terms = query
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-      .split(/\s+/)
-      .filter(t => t.length > 1);
+    const terms = tokenizeQuery(query);
     if (terms.length === 0) return [];
 
     const match = terms.map(t => `"${t}"`).join(' OR ');

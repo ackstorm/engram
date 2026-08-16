@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { Vault } from '../vault.js';
 import { cosineFromL2 } from '../store.js';
-import { fuseRetrievalScores } from '../vault.js';
+import { fuseRetrievalScores, normaliseBm25 } from '../vault.js';
 import type { EmbeddingProvider } from '../embeddings.js';
 
 // ============================================================
@@ -157,6 +157,82 @@ describe('similarity thresholds', () => {
       // which filters to active memories by default, is the real signal.
       const active = await v.recall({ context: 'Friday', limit: 10 });
       expect(active.length).toBe(1);
+    } finally {
+      await v.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ============================================================
+// Stopword-only lexical matches must not outweigh real semantics
+// ============================================================
+
+describe('normaliseBm25', () => {
+  // Calibrated against measured SQLite bm25() output. Across corpora of 5 to
+  // 401 memories, stopword noise sits at 1.8e-6 to 3.9e-6 and does not grow,
+  // while the weakest genuine 1-term match is 2.07 and grows to 10.6.
+
+  it('discards stopword noise regardless of corpus size', () => {
+    const noise = [
+      { id: 'a', score: 3.91e-6 }, { id: 'b', score: 3.83e-6 }, { id: 'c', score: 1.84e-6 },
+    ];
+    expect(normaliseBm25(noise, 2).size).toBe(0);
+  });
+
+  it('keeps the weakest genuine match observed', () => {
+    // 2.07 = 1-term match in a 5-memory corpus, the smallest real score measured.
+    expect(normaliseBm25([{ id: 'a', score: 2.07 }], 1).get('a')).toBeGreaterThan(0.3);
+  });
+
+  it('does not promote a mediocre match to full marks for lack of competition', () => {
+    // The min-max failure mode: a lone result normalised to exactly 1.0.
+    expect(normaliseBm25([{ id: 'a', score: 2.07 }], 1).get('a')).toBeLessThan(0.6);
+  });
+
+  it('scores a strong match well above a weak one', () => {
+    const out = normaliseBm25([{ id: 'strong', score: 10.6 }, { id: 'weak', score: 2.07 }], 1);
+    expect(out.get('strong')!).toBeGreaterThan(0.9);
+    expect(out.get('strong')! - out.get('weak')!).toBeGreaterThan(0.3);
+  });
+
+  it('adapts to query length so longer queries are not inflated', () => {
+    // A 4-term query scoring 12.4 is as ordinary as a 1-term query scoring 2.07.
+    const oneTerm = normaliseBm25([{ id: 'a', score: 2.07 }], 1).get('a')!;
+    const fourTerm = normaliseBm25([{ id: 'a', score: 12.4 }], 4).get('a')!;
+    expect(Math.abs(oneTerm - fourTerm)).toBeLessThan(0.15);
+  });
+
+  it('never reaches 1, so lexical evidence cannot max out the blend', () => {
+    // 63.4 is the largest score measured (4-term query, 401 memories).
+    expect(normaliseBm25([{ id: 'a', score: 63.4 }], 4).get('a')!).toBeLessThan(1);
+  });
+
+  it('returns nothing for no hits', () => {
+    expect(normaliseBm25([], 3).size).toBe(0);
+  });
+});
+
+describe('stopwords', () => {
+  it('does not let a shared stopword decide the ranking', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'engram-stopword-'));
+    // 'container' sits near 'Kubernetes'. The distractors share only the word
+    // "is" with the query — lexically worthless, semantically unrelated.
+    const embedder = new StubEmbedder({
+      'container':  [1, 0, 0],
+      'Kubernetes': [0.95, 0.31, 0],
+      'Coffee':     [0, 0, 1],
+      'Marta':      [0, 1, 0],
+    });
+    const v = new Vault({ owner: 't', dbPath: join(dir, 'v.db') }, embedder);
+    try {
+      v.remember({ content: 'The team decided to migrate the gateway to Kubernetes in Q3' });
+      v.remember({ content: 'Coffee machine on floor 3 is broken again' });
+      v.remember({ content: 'Marta is the SRE lead and owns the on-call rotation' });
+      await v.flush();
+
+      const hits = await v.recall({ context: 'what is our container strategy?', limit: 1 });
+      expect(hits[0].content).toContain('Kubernetes');
     } finally {
       await v.close();
       rmSync(dir, { recursive: true, force: true });

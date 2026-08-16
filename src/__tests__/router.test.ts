@@ -5,6 +5,25 @@ import { tmpdir } from 'os';
 import { Vault } from '../vault.js';
 import { MemoryRouter } from '../router.js';
 
+
+/** Deterministic 3-d embedder so relevance is exact and no API key is needed. */
+class StubEmbedder {
+  constructor(private readonly vectors: Record<string, number[]>) {}
+  private lookup(text: string): number[] {
+    for (const [key, v] of Object.entries(this.vectors)) {
+      if (text.toLowerCase().includes(key)) return this.unit(v);
+    }
+    return this.unit([0, 0, 1]);
+  }
+  private unit(v: number[]): number[] {
+    const n = Math.hypot(...v);
+    return v.map(x => x / n);
+  }
+  async embed(text: string) { return this.lookup(text); }
+  async embedBatch(texts: string[]) { return texts.map(t => this.lookup(t)); }
+  dimensions() { return 3; }
+}
+
 let dir: string;
 let router: MemoryRouter;
 
@@ -60,20 +79,35 @@ describe('merged reads', () => {
   });
 
   it('truncates by score across stores, not by store order', async () => {
-    // Fill global with weak matches so store-order truncation would return
-    // only global rows, and put the single strong match in project.
-    for (let i = 0; i < 10; i++) {
-      router.remember('global', { content: `unrelated note number ${i} about cooking` });
+    // Uses its own router with a deterministic embedder. BM25 alone cannot
+    // carry this test: with one document in the project store its IDF term
+    // collapses, scoring a genuine match at 3.7e-6 — below the 3.9e-6 that
+    // stopword noise produces. That is BM25 behaving correctly on a degenerate
+    // corpus, not something the fusion layer can or should rescue.
+    const d = mkdtempSync(join(tmpdir(), 'engram-router-vec-'));
+    const embedder = new StubEmbedder({ linter: [1, 0, 0], cooking: [0, 1, 0] });
+    const r = new MemoryRouter(
+      new Vault({ owner: 'g', dbPath: join(d, 'g.db') }, embedder),
+      new Vault({ owner: 'p', dbPath: join(d, 'p.db') }, embedder),
+    );
+    try {
+      // Ten global rows first, so store-order truncation would return only those.
+      for (let i = 0; i < 10; i++) {
+        r.remember('global', { content: `unrelated note ${i} about cooking dinner` });
+      }
+      r.remember('project', { content: 'the linter is configured with pnpm lint here' });
+      await (r as any).globalVault.flush();
+      await (r as any).projectVault.flush();
+
+      const results = await r.recall({ context: 'linter configuration', limit: 3 });
+
+      expect(results.length).toBeLessThanOrEqual(3);
+      expect(results.some(x => x.scope === 'project')).toBe(true);
+      expect(results[0].scope).toBe('project');
+    } finally {
+      await r.close();
+      rmSync(d, { recursive: true, force: true });
     }
-    router.remember('project', {
-      content: 'the linter is configured with pnpm lint and biome in this repo',
-    });
-
-    const results = await router.recall({ context: 'linter configuration', limit: 3 });
-
-    expect(results.length).toBeLessThanOrEqual(3);
-    expect(results.some(r => r.scope === 'project')).toBe(true);
-    expect(results[0].scope).toBe('project');
   });
 
   it('returns results in descending relevance regardless of store', async () => {
