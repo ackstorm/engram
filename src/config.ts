@@ -5,6 +5,10 @@
 // Every function reads process.env at CALL time (not module load) so that
 // tests and embedders can change the environment between invocations.
 
+import { existsSync, renameSync } from 'fs';
+import { join, basename, dirname, resolve } from 'path';
+import { homedir } from 'os';
+
 const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
 
 /** Base URL for the Google Gemini API. Override with GOOGLE_GEMINI_BASE_URL. */
@@ -159,4 +163,61 @@ export function checkBearerToken(header: string | undefined, expected: string): 
     diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);
   }
   return diff === 0;
+}
+
+// ============================================================
+// Memory scope and vault paths
+// ============================================================
+
+export type MemoryScope = 'project' | 'global';
+
+function slugify(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'default';
+}
+
+function findGitRoot(dir: string): string | null {
+  let current = resolve(dir);
+  for (;;) {
+    if (existsSync(join(current, '.git'))) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+/**
+ * Which project this process belongs to:
+ *   1. ENGRAM_PROJECT   2. enclosing git repo basename   3. cwd basename
+ *
+ * MCP hosts spawn one server process per project with the project as its cwd,
+ * which is what makes 2 and 3 meaningful. ENGRAM_PROJECT comes first because
+ * that behaviour is only verified on Claude Code. Never throws.
+ */
+export function resolveProject(cwd: string = process.cwd()): string {
+  const explicit = process.env.ENGRAM_PROJECT?.trim();
+  if (explicit) return slugify(explicit);
+  try {
+    const gitRoot = findGitRoot(cwd);
+    return slugify(basename(gitRoot ?? resolve(cwd)));
+  } catch {
+    return 'default';
+  }
+}
+
+/** True when both scopes collapse onto a single file (daemon / legacy layouts). */
+export function isSingleStoreMode(): boolean {
+  return !!(process.env.ENGRAM_DB_PATH?.trim() || process.env.ENGRAM_OWNER?.trim());
+}
+
+/** Absolute path to the vault backing a given scope. */
+export function resolveVaultPath(scope: MemoryScope, cwd?: string): string {
+  const explicitPath = process.env.ENGRAM_DB_PATH?.trim();
+  if (explicitPath) return explicitPath;
+
+  const owner = process.env.ENGRAM_OWNER?.trim();
+  if (owner) return join(homedir(), '.engram', `${owner}.db`);
+
+  return scope === 'global'
+    ? join(homedir(), '.engram', 'global.db')
+    : join(homedir(), '.engram', 'projects', `${resolveProject(cwd)}.db`);
 }
