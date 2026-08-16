@@ -251,8 +251,8 @@ export class Vault {
    * Over many sessions, real patterns accumulate confidence naturally
    * while noise stays at low confidence and gets filtered from recall.
    *
-   * Range: 0.08-0.25 cosine distance (75-92% similarity).
-   * Below 0.08 = dedup handles it. Above 0.25 = too different to reinforce.
+   * Range: 0.75-0.92 cosine similarity.
+   * Above 0.92 = dedup handles it. Below 0.75 = too different to reinforce.
    */
   private reinforce(memory: Memory): void {
     // Only reinforce semantic memories (preferences, observations, patterns)
@@ -276,7 +276,7 @@ export class Vault {
 
       for (const match of similar) {
         if (match.memoryId === memory.id) continue;
-        if (match.distance <= 0.08) continue; // Too similar — dedup territory
+        if (match.similarity >= 0.92) continue; // Too similar — dedup territory
 
         const existing = this.store.getMemoryDirect(match.memoryId);
         if (!existing) continue;
@@ -290,7 +290,7 @@ export class Vault {
 
         // Reinforce: boost the older memory's confidence
         // The boost is proportional to similarity (closer = stronger reinforcement)
-        const similarity = 1 - match.distance;
+        const similarity = match.similarity;
         const boost = 0.1 * similarity; // Max +0.1 per reinforcement
 
         const newConfidence = Math.min(1.0, existing.confidence + boost);
@@ -440,7 +440,7 @@ If nothing: {"insights": []}`;
       // the surrounding text differs but the factual claim conflicts.
       // Entity search catches contradictions even with low vector similarity.
       const candidateSet = new Map<string, Memory>();
-      // Track which candidates came from high vector similarity (cosine dist < 0.3)
+      // Track which candidates came from high vector similarity (cosine similarity > 0.7)
       const highSimilarityIds = new Set<string>();
 
       // 1a. Vector similarity search (works even without entities)
@@ -452,7 +452,7 @@ If nothing: {"insights": []}`;
           .map(s => s.memoryId);
         // Track high-similarity matches that should bypass entity filter
         for (const s of similar) {
-          if (s.memoryId !== memory.id && s.distance < 0.3) {
+          if (s.memoryId !== memory.id && s.similarity > 0.7) {
             highSimilarityIds.add(s.memoryId);
           }
         }

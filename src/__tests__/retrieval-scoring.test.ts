@@ -136,3 +136,30 @@ describe('recall is driven by the query', () => {
     }
   });
 });
+
+describe('similarity thresholds', () => {
+  it('treats paraphrases as near-duplicates, not distinct memories', async () => {
+    // Two vectors at cosine 0.95 — inside the documented 0.92 dedup band,
+    // but L2 0.316, far outside the 0.08 the code compares against today.
+    const embedder = new StubEmbedder({
+      'deploys on Friday':   [1, 0, 0],
+      'ships every Friday':  [0.95, 0.312, 0],
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'engram-dedup-'));
+    const v = new Vault({ owner: 't', dbPath: join(dir, 'v.db') }, embedder);
+    try {
+      v.remember({ content: 'The team deploys on Friday' });
+      await v.flush();
+      v.remember({ content: 'The team ships every Friday' });
+      await v.flush();
+      // Dedup marks the loser 'superseded' rather than deleting it, so
+      // stats().total (a raw row count) stays at 2 either way — recall,
+      // which filters to active memories by default, is the real signal.
+      const active = await v.recall({ context: 'Friday', limit: 10 });
+      expect(active.length).toBe(1);
+    } finally {
+      await v.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
