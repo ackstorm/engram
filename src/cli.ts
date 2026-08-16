@@ -977,18 +977,48 @@ async function runDoctor(values: Record<string, unknown>) {
 
   console.log(bold('\n🩺 Engram Doctor\n'));
 
-  // 1. Vault exists and is readable
+  // 1. Vault(s) exist and are readable
   const engramDir = join(home, '.engram');
-  const owner = (values.owner as string) || 'default';
-  const dbPath = join(engramDir, `${owner}.db`);
-  let vaultStats: { total: number; entities: number; episodic?: number; semantic?: number; procedural?: number; profile?: number } | null = null;
-  try {
-    const vault = new Vault({ owner, dbPath });
-    vaultStats = vault.stats();
-    await vault.close();
-    check(true, 'Vault exists and readable', `${vaultStats.total} memories at ~/.engram/${owner}.db`);
-  } catch (err: any) {
-    check(false, 'Vault exists and readable', err.message);
+  // parseArgs defaults --owner to 'default', so that alone can't signal "explicitly passed" —
+  // treat it the same as unset (its only effect would be to select the vault this already opens).
+  const explicitOwner = values.owner as string | undefined;
+  const explicitDb = values.db as string | undefined;
+  type VaultStatsShape = { total: number; entities: number; episodic?: number; semantic?: number; procedural?: number; profile?: number };
+  let vaultStats: VaultStatsShape | null = null;
+  let projectStats: VaultStatsShape | null = null;
+  if ((explicitOwner && explicitOwner !== 'default') || explicitDb) {
+    // --owner/--db pin a single legacy vault, same as ENGRAM_OWNER/ENGRAM_DB_PATH.
+    const owner = explicitOwner || 'default';
+    const dbPath = explicitDb || join(engramDir, `${owner}.db`);
+    try {
+      const vault = new Vault({ owner, dbPath });
+      vaultStats = vault.stats();
+      await vault.close();
+      check(true, 'Vault exists and readable', `${vaultStats.total} memories at ${dbPath}`);
+    } catch (err: any) {
+      check(false, 'Vault exists and readable', err.message);
+    }
+  } else {
+    try {
+      const { MemoryRouter } = await import('./router.js');
+      const { resolveProject, isSingleStoreMode } = await import('./config.js');
+      const router = MemoryRouter.open();
+      const stats = router.stats();
+      await router.close();
+      vaultStats = stats.global;
+      projectStats = stats.project ?? null;
+      if (isSingleStoreMode()) {
+        check(true, 'Vault exists and readable', `${stats.global.total} memories (single-store mode)`);
+      } else {
+        check(
+          true,
+          'Vaults exist and readable',
+          `global: ${stats.global.total} memories | project (${resolveProject()}): ${projectStats?.total ?? 0} memories`,
+        );
+      }
+    } catch (err: any) {
+      check(false, 'Vault exists and readable', err.message);
+    }
   }
 
   // 2. Gemini API key configured
@@ -1050,14 +1080,16 @@ async function runDoctor(values: Record<string, unknown>) {
   }
   check(hasEngramSection, 'CLAUDE.md has Engram instructions', hasEngramSection ? '~/.claude/CLAUDE.md' : 'Run engram init to add');
 
-  // 6. Vault stats
+  // 6. Vault stats (global + project, when both are in play)
   if (vaultStats) {
+    const sum = (field: 'episodic' | 'semantic' | 'procedural' | 'profile' | 'entities') =>
+      (vaultStats![field] ?? 0) + (projectStats?.[field] ?? 0);
     const parts = [
-      `${vaultStats.episodic ?? 0} episodic`,
-      `${vaultStats.semantic ?? 0} semantic`,
-      `${vaultStats.procedural ?? 0} procedural`,
-      `${vaultStats.profile ?? 0} profile`,
-      `${vaultStats.entities ?? 0} entities`,
+      `${sum('episodic')} episodic`,
+      `${sum('semantic')} semantic`,
+      `${sum('procedural')} procedural`,
+      `${sum('profile')} profile`,
+      `${sum('entities')} entities`,
     ];
     check(true, 'Vault stats', parts.join(', '));
   }

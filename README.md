@@ -8,11 +8,19 @@
 
 Engram gives AI agents knowledge graphs, consolidation, and spreading activation. Not storage. Understanding.
 
-> **Fork notice (ackstorm/engram).** This fork changes three defaults for safety:
+> **Fork notice (ackstorm/engram).** This fork changes several defaults for safety:
 > `ENGRAM_AUTH_TOKEN` is now required by every HTTP listener; `ENGRAM_LLM_MODEL`
 > has no default and must be set; and `engram-mcp --http` binds `127.0.0.1`
 > instead of `0.0.0.0` with `Access-Control-Allow-Origin: *`.
-> See [docs/configuration.md](docs/configuration.md).
+>
+> Memory also lives in **two vaults**, not one — a global store (you, across
+> every project) and a per-project store (this repo), mirroring
+> `~/.claude/CLAUDE.md` and `./CLAUDE.md`. Every write now **requires** an
+> explicit `scope: 'project' | 'global'`; there is no default. A new `profile`
+> memory type holds stable user traits. Mis-filed a memory? `engram_move` (or
+> `POST /v1/move`) relocates it. See
+> [docs/configuration.md](docs/configuration.md) and
+> [docs/references/memory-scope-and-types.md](docs/references/memory-scope-and-types.md).
 
 ---
 

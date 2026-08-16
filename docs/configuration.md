@@ -39,9 +39,43 @@ re-import instead.
 
 ## Storage
 
-| Variable | Default |
-|---|---|
-| `ENGRAM_DB_PATH` | `~/.engram/<owner>.db` |
-| `ENGRAM_OWNER` | `default` |
-| `ENGRAM_SESSIONS_DIR` | `~/.engram/sessions` |
-| `ENGRAM_INGEST_INTERVAL_MS` | `300000` |
+| Variable | Default | Notes |
+|---|---|---|
+| `ENGRAM_DB_PATH` | `~/.engram/<owner>.db` | Collapses both scopes onto one file — see Memory scope below. |
+| `ENGRAM_OWNER` | `default` | Same single-store collapse as `ENGRAM_DB_PATH`. |
+| `ENGRAM_PROJECT` | enclosing git repo basename, then cwd basename | Names the project vault under `~/.engram/projects/`. |
+| `ENGRAM_SESSIONS_DIR` | `~/.engram/sessions` | |
+| `ENGRAM_INGEST_INTERVAL_MS` | `300000` | |
+
+## Memory scope
+
+Memory lives in two SQLite files, not one — mirroring `~/.claude/CLAUDE.md`
+(you) and `./CLAUDE.md` (this repo). Design rationale:
+[`docs/references/memory-scope-and-types.md`](references/memory-scope-and-types.md).
+
+| Store | Path | Holds |
+|---|---|---|
+| global | `~/.engram/global.db` | preferences, traits, company-wide rules — true regardless of codebase |
+| project | `~/.engram/projects/<project>.db` | this repo's conventions, architecture, incidents |
+
+`<project>` resolves in order: `ENGRAM_PROJECT` env var, the enclosing git
+repo's basename, then the current directory's basename. MCP hosts spawn one
+server process per project with the project directory as cwd, which is what
+makes the git-root/cwd fallback meaningful.
+
+Every write tool (`engram_remember`, `engram_ingest`, `engram_checkpoint`,
+`engram_import_obsidian`, `engram_import_claude_code`, and the REST
+equivalents) **requires** an explicit `scope: 'project' | 'global'` — there
+is no default. `engram_recall` and `GET/POST /v1/memories/recall` accept an
+*optional* `scope` to narrow a search to one store; omitting it searches
+both and merges results by relevance, labelled `[scope · type]`.
+
+Stored something in the wrong place? `engram_move({ id, scope })` (or
+`POST /v1/move`) relocates it. Connections to other memories are dropped in
+the process — edges are SQLite foreign keys within one file and cannot span
+stores.
+
+**Single-store fallback.** Setting `ENGRAM_DB_PATH` or `ENGRAM_OWNER`
+collapses both scopes onto one file — the pre-fork daemon layout. `scope` is
+still required on writes for API consistency, but every write lands in the
+same store regardless of which scope you pass.
