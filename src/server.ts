@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Vault } from './vault.js';
+import { MemoryRouter } from './router.js';
 import { createEmbedder } from './embeddings.js';
 import type { EmbeddingProvider } from './embeddings.js';
 import type { VaultConfig } from './types.js';
@@ -7,8 +8,20 @@ import { checkForUpdates, getVersion } from './update-check.js';
 import { createServer } from 'node:http';
 import path from 'path';
 import os from 'os';
-import { geminiEndpoint, resolveLlmModel } from './config.js';
+import { z } from 'zod';
+import { geminiEndpoint, resolveLlmModel, type MemoryScope } from './config.js';
 import { resolveCorsOrigin, corsAllowlist, requireAuthToken, checkBearerToken } from './config.js';
+
+const ScopeSchema = z.enum(['project', 'global']);
+
+function requireScope(body: any, res: import('node:http').ServerResponse): MemoryScope | null {
+  const parsed = ScopeSchema.safeParse(body?.scope);
+  if (!parsed.success) {
+    error(res, 400, "scope is required and must be 'project' or 'global'");
+    return null;
+  }
+  return parsed.data;
+}
 
 // ============================================================
 // Engram REST API Server
@@ -45,6 +58,34 @@ function getOrCreateVault(config: VaultConfig): Vault {
     vaultCache.set(key, vault);
   }
   return vault;
+}
+
+/**
+ * The REST config carries one VaultConfig per tenant — there's no cwd to
+ * resolve a project vault path from, unlike the MCP server. Derive a
+ * sibling project store from the same config so /v1/move and scoped writes
+ * have somewhere real to route to, instead of collapsing to single-store
+ * mode (which would make every move a no-op).
+ */
+function projectConfigFor(config: VaultConfig): VaultConfig {
+  const dbPath = config.dbPath ?? path.join(os.homedir(), '.engram', `${config.owner}.db`);
+  return {
+    ...config,
+    owner: `${config.owner}:project`,
+    dbPath: dbPath.replace(/\.db$/, '') + '.project.db',
+  };
+}
+
+const routerCache = new Map<string, MemoryRouter>();
+
+function getOrCreateRouter(config: VaultConfig): MemoryRouter {
+  const key = `${config.owner}:${config.dbPath ?? 'default'}`;
+  let router = routerCache.get(key);
+  if (!router) {
+    router = new MemoryRouter(getOrCreateVault(config), getOrCreateVault(projectConfigFor(config)));
+    routerCache.set(key, router);
+  }
+  return router;
 }
 
 // ============================================================
@@ -99,7 +140,7 @@ function attachAttribution(response: Record<string, unknown>, vault: Vault): voi
 type RouteHandler = (
   req: import('node:http').IncomingMessage,
   res: import('node:http').ServerResponse,
-  vault: Vault,
+  router: MemoryRouter,
   params: Record<string, string>,
 ) => Promise<void> | void;
 
@@ -127,14 +168,17 @@ function route(method: string, path: string, handler: RouteHandler) {
 // ============================================================
 
 // POST /v1/memories — remember()
-route('POST', '/v1/memories', async (req, res, vault) => {
+route('POST', '/v1/memories', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
-  const memory = vault.remember(body);
+  const scope = requireScope(body, res);
+  if (!scope) return;
+  const { scope: _drop, ...input } = body;
+  const memory = router.remember(scope, input);
   json(res, 201, memory);
 });
 
-// GET /v1/memories/recall?context=...&entities=...&topics=...&types=...&limit=...&spread=...
-route('GET', '/v1/memories/recall', async (req, res, vault) => {
+// GET /v1/memories/recall?context=...&scope=...&entities=...&topics=...&types=...&limit=...&spread=...
+route('GET', '/v1/memories/recall', async (req, res, router) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const context = url.searchParams.get('context');
   if (!context) {
@@ -142,6 +186,8 @@ route('GET', '/v1/memories/recall', async (req, res, vault) => {
     return;
   }
   const input: Record<string, unknown> = { context };
+  const scope = url.searchParams.get('scope');
+  if (ScopeSchema.safeParse(scope).success) input.scope = scope;
   const entities = url.searchParams.get('entities');
   if (entities) input.entities = entities.split(',');
   const topics = url.searchParams.get('topics');
@@ -165,27 +211,27 @@ route('GET', '/v1/memories/recall', async (req, res, vault) => {
   const asOf = url.searchParams.get('asOf');
   if (asOf) input.asOf = asOf;
 
-  const memories = await vault.recall(input as any);
+  const memories = await router.recall(input as any);
   const response: Record<string, unknown> = { memories, count: memories.length };
-  attachAttribution(response, vault);
+  attachAttribution(response, router.vaultFor('global'));
   json(res, 200, response);
 });
 
 // POST /v1/memories/recall — recall() with body (for complex queries)
-route('POST', '/v1/memories/recall', async (req, res, vault) => {
+route('POST', '/v1/memories/recall', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
-  const memories = await vault.recall(body);
+  const memories = await router.recall(body);
   const response: Record<string, unknown> = { memories, count: memories.length };
-  attachAttribution(response, vault);
+  attachAttribution(response, router.vaultFor('global'));
   json(res, 200, response);
 });
 
 // DELETE /v1/memories/:id — forget()
-route('DELETE', '/v1/memories/:id', (req, res, vault, params) => {
+route('DELETE', '/v1/memories/:id', (req, res, router, params) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const hard = url.searchParams.get('hard') === 'true';
   try {
-    const result = vault.forget(params.id, hard);
+    const result = router.forget(params.id, hard);
     if (!result.found) {
       json(res, 404, { error: `No memory found matching ID "${params.id}"` });
       return;
@@ -197,9 +243,9 @@ route('DELETE', '/v1/memories/:id', (req, res, vault, params) => {
 });
 
 // PATCH /v1/memories/:id — update a memory's fields
-route('PATCH', '/v1/memories/:id', async (req, res, vault, params) => {
+route('PATCH', '/v1/memories/:id', async (req, res, router, params) => {
   const body = JSON.parse(await readBody(req));
-  const updated = vault.updateMemoryById(params.id, {
+  const updated = router.updateMemoryById(params.id, {
     content: body.content,
     type: body.type,
     entities: body.entities,
@@ -216,63 +262,78 @@ route('PATCH', '/v1/memories/:id', async (req, res, vault, params) => {
 });
 
 // GET /v1/memories/:id/neighbors — neighbors()
-route('GET', '/v1/memories/:id/neighbors', (req, res, vault, params) => {
+route('GET', '/v1/memories/:id/neighbors', (req, res, router, params) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const depth = parseInt(url.searchParams.get('depth') ?? '1', 10);
-  const memories = vault.neighbors(params.id, depth);
+  const memories = router.neighbors(params.id, depth);
   json(res, 200, { memories, count: memories.length });
 });
 
+// POST /v1/move — relocate a memory between scopes
+route('POST', '/v1/move', async (req, res, router) => {
+  const body = JSON.parse(await readBody(req));
+  const scope = requireScope(body, res);
+  if (!scope) return;
+  if (!body.id || typeof body.id !== 'string') {
+    error(res, 400, 'id is required (string)');
+    return;
+  }
+  const result = router.move(body.id, scope);
+  json(res, 200, result);
+});
+
 // POST /v1/connections — connect()
-route('POST', '/v1/connections', async (req, res, vault) => {
+route('POST', '/v1/connections', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
   const { sourceId, targetId, type, strength } = body;
   if (!sourceId || !targetId || !type) {
     error(res, 400, 'sourceId, targetId, and type are required');
     return;
   }
-  const edge = vault.connect(sourceId, targetId, type, strength);
+  const edge = router.connect(sourceId, targetId, type, strength);
   json(res, 201, edge);
 });
 
 // POST /v1/consolidate — consolidate()
 // Body: { since?: string, all?: boolean }
-route('POST', '/v1/consolidate', async (req, res, vault) => {
+// Runs against the global store only — same single-store shape REST has always
+// returned. Project-scope consolidation is reachable via the MCP server/CLI.
+route('POST', '/v1/consolidate', async (req, res, router) => {
   const raw = await readBody(req).catch(() => '{}');
   const body = JSON.parse(raw || '{}');
-  const report = await vault.consolidate({
+  const report = await router.vaultFor('global').consolidate({
     since: body.since,
     all: body.all,
   });
   json(res, 200, report);
 });
 
-// GET /v1/entities — entities()
-route('GET', '/v1/entities', (req, res, vault) => {
-  const entities = vault.entities();
+// GET /v1/entities — entities() (global store only, see /v1/consolidate note)
+route('GET', '/v1/entities', (req, res, router) => {
+  const entities = router.vaultFor('global').entities();
   json(res, 200, { entities, count: entities.length });
 });
 
-// GET /v1/stats — stats()
-route('GET', '/v1/stats', (req, res, vault) => {
-  const stats = vault.stats();
+// GET /v1/stats — stats() (global store only, see /v1/consolidate note)
+route('GET', '/v1/stats', (req, res, router) => {
+  const stats = router.vaultFor('global').stats();
   json(res, 200, stats);
 });
 
-// POST /v1/export — export()
-route('POST', '/v1/export', (req, res, vault) => {
-  const data = vault.export();
+// POST /v1/export — export() (global store only, see /v1/consolidate note)
+route('POST', '/v1/export', (req, res, router) => {
+  const data = router.vaultFor('global').export();
   json(res, 200, data);
 });
 
 // POST /v1/embeddings/backfill — compute embeddings for all memories
-route('POST', '/v1/embeddings/backfill', async (req, res, vault) => {
-  const count = await vault.backfillEmbeddings();
+route('POST', '/v1/embeddings/backfill', async (req, res, router) => {
+  const count = await router.vaultFor('global').backfillEmbeddings();
   json(res, 200, { backfilled: count });
 });
 
 // POST /v1/ingest — auto-extract memories from raw conversation text
-route('POST', '/v1/ingest', async (req, res, vault) => {
+route('POST', '/v1/ingest', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
   const { text, content, transcript } = body;
   const rawText = text ?? content ?? transcript;
@@ -280,14 +341,16 @@ route('POST', '/v1/ingest', async (req, res, vault) => {
     error(res, 400, 'text, content, or transcript field is required (string)');
     return;
   }
+  const scope = requireScope(body, res);
+  if (!scope) return;
 
   // Simple mode: just remember() with auto-extraction (no LLM needed)
-  const memory = vault.remember({ content: rawText });
+  const memory = router.remember(scope, { content: rawText });
   json(res, 201, memory);
 });
 
 // POST /v1/ingest/auto — auto-ingest from OpenClaw session transcripts
-route('POST', '/v1/ingest/auto', async (req, res, _vault) => {
+route('POST', '/v1/ingest/auto', async (req, res, _router) => {
   try {
     const { ingestNewMessages, loadState } = await import('./auto-ingest.js');
     const body = await readBody(req).catch(() => '{}');
@@ -310,20 +373,21 @@ route('POST', '/v1/ingest/auto', async (req, res, _vault) => {
 });
 
 // POST /v1/ask — answer a question using memories as evidence (recall + LLM synthesis)
-route('POST', '/v1/ask', async (req, res, vault) => {
+// Global store only — see /v1/consolidate note.
+route('POST', '/v1/ask', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
-  const result = await vault.ask(body.question, {
+  const result = await router.vaultFor('global').ask(body.question, {
     limit: body.limit,
     spread: body.spread,
   });
   const response: Record<string, unknown> = { ...result as any };
-  attachAttribution(response, vault);
+  attachAttribution(response, router.vaultFor('global'));
   json(res, 200, response);
 });
 
 // GET /v1/powered-by — attribution badge for agent self-identification
-route('GET', '/v1/powered-by', (req, res, vault) => {
-  const attr = getAttribution(vault);
+route('GET', '/v1/powered-by', (req, res, router) => {
+  const attr = getAttribution(router.vaultFor('global'));
   json(res, 200, attr ?? {
     enabled: false,
     text: 'Engram memory system',
@@ -332,23 +396,26 @@ route('GET', '/v1/powered-by', (req, res, vault) => {
 });
 
 // GET /v1/alerts — what needs attention right now? (no context needed)
-route('GET', '/v1/alerts', async (req, res, vault) => {
+// Global store only — see /v1/consolidate note.
+route('GET', '/v1/alerts', async (req, res, router) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const staleDays = url.searchParams.get('staleDays') ? parseInt(url.searchParams.get('staleDays')!) : undefined;
   const limit = url.searchParams.get('limit') ? parseInt(url.searchParams.get('limit')!) : undefined;
-  const result = vault.alerts({ staleDays, limit });
+  const result = router.vaultFor('global').alerts({ staleDays, limit });
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ alerts: result, count: result.length }));
 });
 
 // POST /v1/checkpoint — save context before it's lost (pre-compaction, session end)
-route('POST', '/v1/checkpoint', async (req, res, vault) => {
+route('POST', '/v1/checkpoint', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
   if (!body.summary || typeof body.summary !== 'string') {
     error(res, 400, 'summary field required (string — the context to save)');
     return;
   }
-  const result = await vault.checkpoint(body.summary, {
+  const scope = requireScope(body, res);
+  if (!scope) return;
+  const result = await router.checkpoint(scope, body.summary, {
     maxMemories: body.maxMemories,
     label: body.label,
   });
@@ -362,13 +429,13 @@ route('POST', '/v1/checkpoint', async (req, res, vault) => {
 });
 
 // POST /v1/audit — cross-reference external content against vault
-route('POST', '/v1/audit', async (req, res, vault) => {
+route('POST', '/v1/audit', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
   if (!body.content || typeof body.content !== 'string') {
     error(res, 400, 'content field required (string — the external text to audit)');
     return;
   }
-  const result = await vault.audit(body.content, {
+  const result = await router.audit(body.content, {
     maxClaims: body.maxClaims,
     relevanceThreshold: body.relevanceThreshold,
   });
@@ -377,14 +444,14 @@ route('POST', '/v1/audit', async (req, res, vault) => {
 });
 
 // POST /v1/surface — proactive memory surfacing (memories pushed, not pulled)
-route('POST', '/v1/surface', async (req, res, vault) => {
+route('POST', '/v1/surface', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
   const { context, activeEntities, activeTopics, seen, minSalience, minHoursSinceAccess, limit, relevanceThreshold } = body;
   if (!context || typeof context !== 'string') {
     error(res, 400, 'context field is required (string)');
     return;
   }
-  const results = await vault.surface({
+  const results = await router.surface({
     context,
     activeEntities,
     activeTopics,
@@ -398,26 +465,26 @@ route('POST', '/v1/surface', async (req, res, vault) => {
 });
 
 // POST /v1/briefing — session briefing: structured context summary for session start
-route('POST', '/v1/briefing', async (req, res, vault) => {
+route('POST', '/v1/briefing', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
   const context = body.context ?? body.topic ?? '';
   const limit = body.limit ?? 20;
-  const briefing = await vault.briefing(context, limit);
+  const briefing = await router.briefing(context, limit);
   json(res, 200, briefing);
 });
 
 // GET /v1/briefing — session briefing with optional context
-route('GET', '/v1/briefing', async (req, res, vault) => {
+route('GET', '/v1/briefing', async (req, res, router) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const context = url.searchParams.get('context') ?? '';
   const limit = parseInt(url.searchParams.get('limit') ?? '20', 10);
-  const briefing = await vault.briefing(context, limit);
+  const briefing = await router.briefing(context, limit);
   json(res, 200, briefing);
 });
 
 // POST /v1/shadow/compare — compare Engram briefing vs a memory file
 // Shadow mode: run Engram alongside existing memory, see what each catches
-route('POST', '/v1/shadow/compare', async (req, res, vault) => {
+route('POST', '/v1/shadow/compare', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
   const memoryFileContent = body.memoryFile ?? '';
   const context = body.context ?? '';
@@ -428,7 +495,7 @@ route('POST', '/v1/shadow/compare', async (req, res, vault) => {
   }
 
   // Get Engram briefing
-  const briefing = await vault.briefing(context, limit);
+  const briefing = await router.briefing(context, limit);
 
   // Collect all surfaced items from briefing sections
   const surfacedItems: string[] = [
@@ -492,7 +559,7 @@ route('POST', '/v1/shadow/compare', async (req, res, vault) => {
 
 // POST /v1/ingest/realtime — Real-time memory extraction from conversation text
 // Send a message or conversation snippet, get memories extracted and stored instantly
-route('POST', '/v1/ingest/realtime', async (req, res, vault) => {
+route('POST', '/v1/ingest/realtime', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
   const text = body.text ?? '';
   const geminiKey = process.env.GEMINI_API_KEY ?? process.env.ENGRAM_LLM_API_KEY;
@@ -500,11 +567,13 @@ route('POST', '/v1/ingest/realtime', async (req, res, vault) => {
   if (!text) {
     return error(res, 400, 'text is required');
   }
+  const scope = requireScope(body, res);
+  if (!scope) return;
   if (!geminiKey) {
     // Fallback: store as single memory using rule-based extraction
     const { extract } = await import('./extract.js');
     const extracted = extract(text);
-    const mem = await vault.remember({
+    const mem = router.remember(scope, {
       content: text.slice(0, 500),
       type: 'episodic',
       entities: extracted.entities,
@@ -562,7 +631,7 @@ Respond as JSON:
       if (/(?:sk-|api[_-]?key|password|token|secret)[:\s=]+\S{10,}/i.test(mem.content)) continue;
       if (/AIza[a-zA-Z0-9_-]{30,}/.test(mem.content)) continue;
 
-      const stored = await vault.remember({
+      const stored = router.remember(scope, {
         content: mem.content,
         type: mem.type ?? 'episodic',
         entities: mem.entities ?? [],
@@ -580,11 +649,11 @@ Respond as JSON:
   }
 });
 
-// GET /v1/contradictions — list unresolved contradictions
-route('GET', '/v1/contradictions', (req, res, vault) => {
+// GET /v1/contradictions — list unresolved contradictions (both stores, scope-labelled)
+route('GET', '/v1/contradictions', (req, res, router) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
-  const contradictions = vault.contradictions(limit);
+  const contradictions = router.contradictions(limit);
   json(res, 200, { contradictions, count: contradictions.length });
 });
 
@@ -608,21 +677,21 @@ export function createEngramServer(config: ServerConfig) {
     throw new Error('[engram] createEngramServer requires a non-empty authToken.');
   }
 
-  function resolveVault(req: import('node:http').IncomingMessage): Vault | null {
+  function resolveRouter(req: import('node:http').IncomingMessage): MemoryRouter | null {
     const authHeader = req.headers.authorization;
 
-    // Single-tenant mode: one shared vault behind the server token.
+    // Single-tenant mode: one shared router behind the server token.
     if (config.defaultVault) {
       if (!checkBearerToken(authHeader, authToken)) return null;
-      return getOrCreateVault(config.defaultVault);
+      return getOrCreateRouter(config.defaultVault);
     }
 
-    // Multi-tenant: the bearer value selects the vault.
+    // Multi-tenant: the bearer value selects the tenant's router.
     if (!authHeader?.startsWith('Bearer ')) return null;
     const apiKey = authHeader.slice(7);
     const vaultConfig = config.vaults[apiKey];
     if (!vaultConfig) return null;
-    return getOrCreateVault(vaultConfig);
+    return getOrCreateRouter(vaultConfig);
   }
 
   const server = createServer(async (req, res) => {
@@ -666,15 +735,15 @@ export function createEngramServer(config: ServerConfig) {
         return;
       }
 
-      // Resolve vault
-      const vault = resolveVault(req);
-      if (!vault) {
+      // Resolve router
+      const router = resolveRouter(req);
+      if (!router) {
         error(res, 401, 'Invalid or missing API key');
         return;
       }
 
       try {
-        await r.handler(req, res, vault, params);
+        await r.handler(req, res, router, params);
       } catch (err: any) {
         console.error(`Error handling ${req.method} ${pathname}:`, err);
         error(res, 500, err.message ?? 'Internal server error');
@@ -699,6 +768,7 @@ export function createEngramServer(config: ServerConfig) {
       const closePromises = [...vaultCache.values()].map(v => v.close());
       await Promise.allSettled(closePromises);
       vaultCache.clear();
+      routerCache.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
     server,
@@ -780,6 +850,7 @@ Example:
     console.log('  GET    /v1/alerts             — What needs attention right now?');
     console.log('  POST   /v1/ingest/auto       — Auto-ingest from OpenClaw transcripts');
     console.log('  POST   /v1/checkpoint         — Save context before compaction/session end');
+    console.log('  POST   /v1/move                — Move a memory to the other scope');
     console.log('  POST   /v1/audit             — Cross-reference external content vs vault');
     console.log('  PATCH  /v1/memories/:id       — Update a memory');
     console.log('  DELETE /v1/memories/:id       — Forget a memory');

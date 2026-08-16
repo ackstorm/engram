@@ -72,6 +72,7 @@ describe('Memories', () => {
   it('POST /v1/memories creates a memory from string', async () => {
     const { status, data } = await api('POST', '/v1/memories', {
       content: 'User prefers dark mode and concise answers',
+      scope: 'project',
       entities: ['User'],
       topics: ['preferences'],
       salience: 0.8,
@@ -86,6 +87,7 @@ describe('Memories', () => {
   it('POST /v1/memories creates another memory', async () => {
     const { status, data } = await api('POST', '/v1/memories', {
       content: 'User is training for a marathon in April',
+      scope: 'project',
       entities: ['User', 'marathon'],
       topics: ['fitness', 'goals'],
       salience: 0.7,
@@ -97,6 +99,7 @@ describe('Memories', () => {
   it('POST a third memory for graph testing', async () => {
     const { status } = await api('POST', '/v1/memories', {
       content: 'User switched from Vue to React last month',
+      scope: 'project',
       entities: ['User', 'React', 'Vue'],
       topics: ['engineering', 'frontend'],
     });
@@ -137,6 +140,7 @@ describe('Memories', () => {
     // Create a throwaway memory
     const { data: mem } = await api('POST', '/v1/memories', {
       content: 'Throwaway memory for deletion test',
+      scope: 'project',
     });
     const { status, data } = await api('DELETE', `/v1/memories/${mem.id}?hard=true`);
     expect(status).toBe(200);
@@ -151,11 +155,13 @@ describe('Connections', () => {
   beforeAll(async () => {
     const { data: m1 } = await api('POST', '/v1/memories', {
       content: 'TypeScript is the best language for SDKs',
+      scope: 'project',
       entities: ['TypeScript'],
       topics: ['engineering'],
     });
     const { data: m2 } = await api('POST', '/v1/memories', {
       content: 'JavaScript ecosystem has the most packages',
+      scope: 'project',
       entities: ['JavaScript'],
       topics: ['engineering'],
     });
@@ -221,6 +227,43 @@ describe('Export', () => {
     expect(status).toBe(200);
     expect(data.memories).toBeDefined();
     expect(Array.isArray(data.memories)).toBe(true);
+  });
+});
+
+describe('Scope', () => {
+  it('rejects a memory with no scope', async () => {
+    const { status, data } = await api('POST', '/v1/memories', { content: 'no scope given' });
+    expect(status).toBe(400);
+    expect(data.error).toContain('scope');
+  });
+
+  it('rejects an invalid scope', async () => {
+    const { status } = await api('POST', '/v1/memories', { content: 'bad', scope: 'universal' });
+    expect(status).toBe(400);
+  });
+
+  it('accepts and echoes a valid scope', async () => {
+    const { status, data } = await api('POST', '/v1/memories', {
+      content: 'a global preference', scope: 'global', type: 'profile',
+    });
+    expect(status).toBe(201);
+    expect(data.scope).toBe('global');
+  });
+
+  it('recall labels results with scope', async () => {
+    await api('POST', '/v1/memories', { content: 'project detail about caching', scope: 'project' });
+    const { data } = await api('GET', '/v1/memories/recall?context=caching');
+    expect(data.memories[0].scope).toBeDefined();
+  });
+
+  it('POST /v1/move relocates a memory', async () => {
+    const { data: created } = await api('POST', '/v1/memories', {
+      content: 'filed in the wrong place', scope: 'project',
+    });
+    const { status, data } = await api('POST', '/v1/move', { id: created.id, scope: 'global' });
+    expect(status).toBe(200);
+    expect(data.moved).toBe(true);
+    expect(data.from).toBe('project');
   });
 });
 

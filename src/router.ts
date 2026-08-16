@@ -129,6 +129,26 @@ export class MemoryRouter {
     return { found: false, fullId: null };
   }
 
+  updateMemoryById(id: string, updates: Parameters<Vault['updateMemoryById']>[1]): ScopedMemory | null {
+    for (const { scope, vault } of this.stores()) {
+      const updated = vault.updateMemoryById(id, updates);
+      if (updated) return { ...updated, scope };
+    }
+    return null;
+  }
+
+  /** Raw dump of both stores, concatenated — REST's /v1/export. */
+  export(): { memories: ScopedMemory[]; edges: Edge[] } {
+    const memories: ScopedMemory[] = [];
+    const edges: Edge[] = [];
+    for (const { scope, vault } of this.stores()) {
+      const dump = vault.export();
+      memories.push(...dump.memories.map(m => ({ ...m, scope }) as ScopedMemory));
+      edges.push(...dump.edges);
+    }
+    return { memories, edges };
+  }
+
   /** Graph traversal stays inside the owning store — edges never cross. */
   neighbors(id: string, depth = 1): ScopedMemory[] {
     for (const { scope, vault } of this.stores()) {
