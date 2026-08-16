@@ -102,17 +102,40 @@ const SECONDARY_SIGNAL_RATIO = 0.5;
 /** The largest fixed weight any secondary signal assigns (entity 0.25 + type 0.1). */
 const MAX_SECONDARY_WEIGHT = 0.35;
 
+/**
+ * Vector share of the hybrid blend. Measured, not asserted: sweeping against
+ * eval/retrieval.ts (49 memories, 25 labelled queries, text-embedding-3-small)
+ * gives MRR 0.675 at 0.50, 0.771 at 0.75, 0.810 at 0.90 and 0.821 at 0.95.
+ *
+ * 0.90 rather than 0.95 because the gap is one query on a 25-query set — inside
+ * the noise — and that corpus under-states what lexical search is worth: every
+ * lexical case in it is a distinctive single word the embedder also resolves.
+ * Real vaults carry identifiers, error codes and jargon where BM25 earns more.
+ */
+const DEFAULT_HYBRID_ALPHA = 0.9;
+
+/** Vector share of the hybrid blend, in [0,1]. Read per call so tests can vary it. */
+function hybridAlpha(): number {
+  const raw = Number(process.env.ENGRAM_HYBRID_ALPHA);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : DEFAULT_HYBRID_ALPHA;
+}
+
 export function fuseRetrievalScores(
   vectorSimilarity: Map<string, number>,
   bm25Normalised: Map<string, number>,
   hasVector: boolean,
   hasLexical: boolean,
 ): Map<string, number> {
-  // 0.75/0.25 is Weaviate's documented default alpha for hybrid search. Renormalised
-  // below over whichever retrievers actually ran, so a vault with no embedder still
-  // gets the full ceiling from lexical alone.
-  const wv = hasVector ? 0.75 : 0;
-  const wl = hasLexical ? 0.25 : 0;
+  // Alpha is the vector share of the hybrid blend; 1 - alpha goes to lexical.
+  // Weaviate's documented default is 0.75; ENGRAM_HYBRID_ALPHA overrides it so
+  // the value can be measured rather than asserted (see eval/retrieval.ts).
+  // Renormalised below over whichever retrievers actually ran, so a vault with
+  // no embedder still gets the full ceiling from lexical alone.
+  const alpha = hybridAlpha();
+  const wv = hasVector ? alpha : 0;
+  // Lexical takes the whole weight when no vector search ran — otherwise an
+  // alpha of 1.0 would leave a keyword-only vault with no signal at all.
+  const wl = hasLexical ? (hasVector ? 1 - alpha : 1) : 0;
   const total = wv + wl;
   const out = new Map<string, number>();
   if (total === 0) return out;

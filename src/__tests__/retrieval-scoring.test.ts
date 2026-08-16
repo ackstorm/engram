@@ -239,3 +239,31 @@ describe('stopwords', () => {
     }
   });
 });
+
+describe('hybrid alpha', () => {
+  it('gives lexical the full weight when no vector search ran', () => {
+    // Regression: computing wl as 1 - alpha left a keyword-only vault with
+    // zero signal at alpha 1.0, returning nothing at all.
+    const prev = process.env.ENGRAM_HYBRID_ALPHA;
+    process.env.ENGRAM_HYBRID_ALPHA = '1';
+    try {
+      const out = fuseRetrievalScores(new Map(), new Map([['a', 0.5]]), false, true);
+      expect(out.get('a')).toBeCloseTo(0.6 * 0.5, 6);
+    } finally {
+      if (prev === undefined) delete process.env.ENGRAM_HYBRID_ALPHA;
+      else process.env.ENGRAM_HYBRID_ALPHA = prev;
+    }
+  });
+
+  it('falls back to the default for an out-of-range value', () => {
+    const prev = process.env.ENGRAM_HYBRID_ALPHA;
+    process.env.ENGRAM_HYBRID_ALPHA = 'banana';
+    try {
+      const out = fuseRetrievalScores(new Map([['a', 1]]), new Map(), true, false);
+      expect(out.get('a')).toBeCloseTo(0.6, 6);
+    } finally {
+      if (prev === undefined) delete process.env.ENGRAM_HYBRID_ALPHA;
+      else process.env.ENGRAM_HYBRID_ALPHA = prev;
+    }
+  });
+});

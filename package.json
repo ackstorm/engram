@@ -25,7 +25,8 @@
     "cli": "tsx src/cli.ts",
     "serve": "tsx src/server.ts",
     "mcp": "tsx src/mcp.ts",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "eval:retrieval": "tsx eval/retrieval.ts"
   },
   "keywords": [
     "ai",
