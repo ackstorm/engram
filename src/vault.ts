@@ -47,25 +47,51 @@ async function withRetry<T>(
 }
 
 // ============================================================
-// Reciprocal Rank Fusion
+// Retrieval score fusion
 // ============================================================
 
-/** Standard RRF constant. Also defines the max possible fused score for N rankings: N / (RRF_K + 1). */
-const RRF_K = 60;
-
 /**
- * Reciprocal Rank Fusion (Cormack et al., 2009): score = Σ 1/(k + rank).
- * Combines rankings whose scores are not on a common scale — which is exactly
- * the case for cosine similarity and BM25. k=60 is the standard constant.
+ * Combine the semantic and lexical retrievers into a base score in [0, 0.6].
+ *
+ * Cosine similarity is used directly because it carries real dynamic range —
+ * that range is what lets relevance outweigh the salience/stability multiplier
+ * applied later (which spans 0.64-0.89, a factor of 1.39). BM25 scores are
+ * unbounded and corpus-dependent, so they are min-max normalised within the
+ * query before blending.
+ *
+ * Weights are renormalised over the retrievers that actually ran, so a vault
+ * with no embedder still gets the full 0.6 ceiling from lexical search alone.
  */
-function rrf(rankings: string[][], k = RRF_K): Map<string, number> {
-  const fused = new Map<string, number>();
-  for (const ranking of rankings) {
-    ranking.forEach((id, index) => {
-      fused.set(id, (fused.get(id) ?? 0) + 1 / (k + index + 1));
-    });
+export function fuseRetrievalScores(
+  vectorSimilarity: Map<string, number>,
+  bm25Normalised: Map<string, number>,
+  hasVector: boolean,
+  hasLexical: boolean,
+): Map<string, number> {
+  const wv = hasVector ? 0.7 : 0;
+  const wl = hasLexical ? 0.3 : 0;
+  const total = wv + wl;
+  const out = new Map<string, number>();
+  if (total === 0) return out;
+
+  for (const id of new Set([...vectorSimilarity.keys(), ...bm25Normalised.keys()])) {
+    const v = Math.max(0, vectorSimilarity.get(id) ?? 0);
+    const l = Math.max(0, bm25Normalised.get(id) ?? 0);
+    out.set(id, 0.6 * ((wv * v + wl * l) / total));
   }
-  return fused;
+  return out;
+}
+
+/** Min-max normalise to [0,1] within a result set. A lone result maps to 1. */
+function normaliseScores(hits: Array<{ id: string; score: number }>): Map<string, number> {
+  const out = new Map<string, number>();
+  if (hits.length === 0) return out;
+  const values = hits.map(h => h.score);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min;
+  for (const h of hits) out.set(h.id, span === 0 ? 1 : (h.score - min) / span);
+  return out;
 }
 
 // ============================================================
@@ -688,34 +714,33 @@ If nothing: {"insights": []}`;
     // because common entities (e.g. "Thomas" in 100+ memories)
     // flood the candidate pool with noise if scored too high.
 
-    // 1. Vector search (semantic) and BM25 (lexical), fused via Reciprocal
-    // Rank Fusion — see the `rrf()` helper above. Cosine similarity and BM25
-    // are not on a comparable scale, so ranks are fused rather than scores.
-    // The fused value is scaled up to the historical 0-1 "primary signal"
-    // range so it still outweighs the secondary entity/topic boosts below,
-    // matching the original design intent (vector/keyword = primary retriever).
-    // Normalizing against the THEORETICAL max (both signals agreeing on rank 1),
-    // not the observed max, so a query with only one weak signal still scores
-    // lower than one where vector and BM25 agree — the observed max would
-    // otherwise always map the best available hit to full strength even when
-    // it's a poor match.
-    let vectorIds: string[] = [];
+    // 1. Vector search (semantic) and BM25 (lexical), fused into a base score
+    // in [0, 0.6] — see `fuseRetrievalScores` above. Cosine similarity carries
+    // real dynamic range (unlike a rank-based fusion), which is what lets
+    // relevance actually outweigh the secondary entity/topic boosts and the
+    // salience/stability multiplier applied in step 8 below.
+    const vectorSimilarity = new Map<string, number>();
+    let hasVector = false;
     if (this.embedder && this.store.hasVectorSearch()) {
       try {
         const queryEmbedding = await this.embedder.embed(parsed.context);
-        vectorIds = this.store.searchByVector(queryEmbedding, 50).map(vr => vr.memoryId);
+        const hits = this.store.searchByVector(queryEmbedding, 50);
+        for (const h of hits) vectorSimilarity.set(h.memoryId, h.similarity);
+        hasVector = hits.length > 0;
       } catch (err) {
-        // Vector search failed — BM25 alone still contributes below.
+        // Vector search failed — lexical alone still gets the full ceiling.
       }
     }
-    const bm25Ids = this.store.searchBM25(parsed.context, 50).map(h => h.id);
-    const fused = rrf([vectorIds, bm25Ids]);
+
+    const bm25Hits = this.store.searchBM25(parsed.context, 50);
+    const bm25Normalised = normaliseScores(bm25Hits);
+    const fused = fuseRetrievalScores(
+      vectorSimilarity, bm25Normalised, hasVector, bm25Hits.length > 0,
+    );
+
     if (fused.size > 0) {
-      const maxPossibleFused = 2 / (RRF_K + 1);
-      const fusedMemories = this.store.getMemoriesDirect([...fused.keys()]);
-      for (const mem of fusedMemories) {
-        const score = fused.get(mem.id)!;
-        this.addCandidate(candidates, mem, Math.min(score / maxPossibleFused, 1) * 0.6);
+      for (const mem of this.store.getMemoriesDirect([...fused.keys()])) {
+        this.addCandidate(candidates, mem, fused.get(mem.id)!);
       }
     }
 
@@ -2148,7 +2173,7 @@ Status: "active" for current facts, "pending" for commitments not yet fulfilled.
         for (const vr of vectorResults) {
           const mem = this.store.getMemoryDirect(vr.memoryId);
           if (mem) {
-            const score = Math.max(0, 1 - vr.distance);
+            const score = Math.max(0, vr.similarity);
             this.addCandidate(candidates, mem, score * 0.7);
           }
         }

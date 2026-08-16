@@ -10,6 +10,19 @@ import type { Memory, Edge, Entity, RememberParsed } from './types.js';
 // Uses Node.js built-in node:sqlite (Node 22.5+) — zero native deps.
 // ============================================================
 
+/**
+ * sqlite-vec's vec0 tables default to EUCLIDEAN distance — `distance_metric=cosine`
+ * is not set on vec_memories. For unit-normalised vectors (all three providers
+ * emit them) the identity is d = sqrt(2 - 2*cos), so cos = 1 - d^2 / 2.
+ *
+ * Treating the raw L2 distance as a cosine distance understates similarity
+ * badly: d=1.13 is cosine 0.36, but `1 - d` reads as -0.13.
+ */
+export function cosineFromL2(distance: number): number {
+  const cos = 1 - (distance * distance) / 2;
+  return Math.max(-1, Math.min(1, cos));
+}
+
 export class MemoryStore {
   private db: DatabaseSync;
   private vecEnabled: boolean = false;
@@ -782,7 +795,7 @@ export class MemoryStore {
   }
 
   /** Find nearest neighbors by embedding vector */
-  searchByVector(embedding: number[], limit: number = 20): Array<{ memoryId: string; distance: number }> {
+  searchByVector(embedding: number[], limit: number = 20): Array<{ memoryId: string; distance: number; similarity: number }> {
     if (!this.vecEnabled) return [];
 
     const arr = new Float32Array(embedding);
@@ -796,7 +809,7 @@ export class MemoryStore {
       LIMIT ?
     `).all(buf, limit) as unknown as Array<{ memory_id: string; distance: number }>;
 
-    return rows.map(r => ({ memoryId: r.memory_id, distance: r.distance }));
+    return rows.map(r => ({ memoryId: r.memory_id, distance: r.distance, similarity: cosineFromL2(r.distance) }));
   }
 
   /** Check if vector search is available */
@@ -849,10 +862,10 @@ export class MemoryStore {
   findSimilar(embedding: number[], threshold: number = 0.12, limit: number = 3): Array<{ memoryId: string; distance: number; similarity: number }> {
     if (!this.vecEnabled) return [];
     const results = this.searchByVector(embedding, limit);
-    // distance is cosine distance; similarity = 1 - distance
+    // `threshold` is a COSINE DISTANCE (1 - similarity), not the raw L2 value.
     return results
-      .filter(r => r.distance <= threshold)
-      .map(r => ({ ...r, similarity: 1 - r.distance }));
+      .filter(r => 1 - r.similarity <= threshold)
+      .map(r => ({ ...r, similarity: r.similarity }));
   }
 
   // --------------------------------------------------------
