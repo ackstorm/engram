@@ -4,7 +4,7 @@ import { z } from 'zod';
 // Memory Types — The core data model for Engram
 // ============================================================
 
-export const MemoryType = z.enum(['episodic', 'semantic', 'procedural']);
+export const MemoryType = z.enum(['episodic', 'semantic', 'procedural', 'profile']);
 export type MemoryType = z.infer<typeof MemoryType>;
 
 export const SourceType = z.enum([

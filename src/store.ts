@@ -186,6 +186,86 @@ export class MemoryStore {
         );
       `);
     }
+
+    // ── Schema v2: drop the CHECK on memories.type so the taxonomy can grow ──
+    // SQLite cannot alter a CHECK constraint, so the table must be rebuilt.
+    // Guarded by schema_version so this runs exactly once per vault.
+    const version = (this.db
+      .prepare(`SELECT value FROM engram_meta WHERE key = 'schema_version'`)
+      .get() as { value: string } | undefined)?.value;
+
+    if (version !== '2') {
+      const COLS = [
+        'id', 'type', 'content', 'summary',
+        'source_type', 'source_session_id', 'source_agent_id', 'source_evidence',
+        'source_timestamp', 'created_at', 'last_accessed_at', 'last_modified_at',
+        'access_count', 'expires_at', 'salience', 'confidence', 'stability',
+        'entities', 'topics', 'status', 'visibility', 'embedding',
+        'valid_from', 'valid_until', 'scope',
+      ].join(', ');
+
+      this.db.exec('PRAGMA foreign_keys = OFF');
+      this.db.exec('BEGIN');
+      try {
+        this.db.exec(`
+          CREATE TABLE memories_new (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            content TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_session_id TEXT,
+            source_agent_id TEXT,
+            source_evidence TEXT,
+            source_timestamp TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            last_accessed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            last_modified_at TEXT NOT NULL DEFAULT (datetime('now')),
+            access_count INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
+            salience REAL NOT NULL DEFAULT 0.5,
+            confidence REAL NOT NULL DEFAULT 0.8,
+            stability REAL NOT NULL DEFAULT 1.0,
+            entities TEXT NOT NULL DEFAULT '[]',
+            topics TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'active'
+              CHECK(status IN ('active','pending','fulfilled','superseded','archived')),
+            visibility TEXT NOT NULL DEFAULT 'owner_agents',
+            embedding BLOB,
+            valid_from TEXT,
+            valid_until TEXT,
+            scope TEXT NOT NULL DEFAULT 'both'
+          );
+        `);
+        this.db.exec(`INSERT INTO memories_new (${COLS}) SELECT ${COLS} FROM memories;`);
+        this.db.exec('DROP TABLE memories');
+        this.db.exec('ALTER TABLE memories_new RENAME TO memories');
+        this.db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
+          CREATE INDEX IF NOT EXISTS idx_memories_salience ON memories(salience DESC);
+          CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_memories_accessed ON memories(last_accessed_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_memories_stability ON memories(stability);
+          CREATE INDEX IF NOT EXISTS idx_memories_valid_from ON memories(valid_from);
+          CREATE INDEX IF NOT EXISTS idx_memories_valid_until ON memories(valid_until);
+        `);
+
+        const violations = this.db.prepare('PRAGMA foreign_key_check').all();
+        if (violations.length > 0) {
+          throw new Error(`foreign_key_check found ${violations.length} violations`);
+        }
+
+        this.db.exec(
+          `INSERT OR REPLACE INTO engram_meta (key, value) VALUES ('schema_version', '2')`,
+        );
+        this.db.exec('COMMIT');
+      } catch (err) {
+        this.db.exec('ROLLBACK');
+        throw err;
+      } finally {
+        this.db.exec('PRAGMA foreign_keys = ON');
+      }
+    }
   }
 
   /** Embedding dimension this vault was built with; 0 when it has no vectors. */
