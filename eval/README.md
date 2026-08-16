@@ -93,6 +93,17 @@ Two caveats before adopting it:
   and there is no migration path. See
   `docs/references/embedding-config-is-immutable.md`.
 
+### Things measured and rejected
+
+Recorded so they are not rebuilt on intuition.
+
+| Change | Measured | Verdict |
+|---|---|---|
+| Extraction reflection pass | +4.3% entities over three transcript-like texts, against a 15% bar set before measuring | Rejected. The one entity gained was "Tuesday" — a date. Does not pay for a second LLM call per extraction. |
+| Removing the salience/stability weighting | MRR 0.821 against 0.810 | Not acted on. This corpus has uniform auto-extracted salience, so it can show what the stage costs but never what it contributes. Needs a corpus with deliberately varied salience. |
+| Relative semantic gate at 40% of top cosine | Caught exactly one case, measured at 39.4% | Rejected. The threshold was fitted to a single observation. The BM25 noise floor fixes that case on evidence instead. |
+| Neural reranking stage | Mnemis ablation: 89.1 with, 89.1 without | Not built. |
+
 ## Interpreting a run
 
 `recall@3` well above `recall@1` means the ranking is close but the tie-break is

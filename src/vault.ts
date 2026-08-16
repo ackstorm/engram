@@ -120,6 +120,7 @@ function hybridAlpha(): number {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : DEFAULT_HYBRID_ALPHA;
 }
 
+
 export function fuseRetrievalScores(
   vectorSimilarity: Map<string, number>,
   bm25Normalised: Map<string, number>,
@@ -2552,7 +2553,7 @@ Keep entities specific and topics general. Limit to 10 entities and 8 topics max
         this.config.llm,
       );
       const result = JSON.parse(response);
-      
+
       return {
         entities: (result.entities || []).slice(0, 10),
         topics: (result.topics || []).slice(0, 8),
