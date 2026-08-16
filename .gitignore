@@ -24,3 +24,4 @@ signal-quality-plan.md
 # Agent working files — implementation plans are disposable once executed
 .claude/
 docs/superpowers/
+.worktrees/
