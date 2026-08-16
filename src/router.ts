@@ -182,21 +182,35 @@ export class MemoryRouter {
     };
   }
 
-  async briefing(context = '', limit = 20): Promise<Awaited<ReturnType<Vault['briefing']>>> {
-    const parts = await Promise.all(this.stores().map(({ vault }) => vault.briefing(context, limit)));
+  async briefing(context = '', limit = 20): Promise<
+    Omit<Awaited<ReturnType<Vault['briefing']>>, 'recentChanges' | 'activeCommitments' | 'recentActivity'> & {
+      recentChanges: Array<Awaited<ReturnType<Vault['briefing']>>['recentChanges'][number] & { scope: MemoryScope }>;
+      activeCommitments: Array<Awaited<ReturnType<Vault['briefing']>>['activeCommitments'][number] & { scope: MemoryScope }>;
+      recentActivity: Array<Awaited<ReturnType<Vault['briefing']>>['recentActivity'][number] & { scope: MemoryScope }>;
+    }
+  > {
+    const parts = await Promise.all(
+      this.stores().map(async ({ scope, vault }) => ({ scope, ...await vault.briefing(context, limit) })),
+    );
     const [first, ...rest] = parts;
-    const merged = rest.reduce((acc, p) => {
-      acc.summary += `\n${p.summary}`;
-      acc.keyFacts.push(...p.keyFacts);
-      acc.recentChanges.push(...p.recentChanges);
-      acc.activeCommitments.push(...p.activeCommitments);
-      acc.recentActivity.push(...p.recentActivity);
-      acc.contradictions.push(...p.contradictions);
+    const tag = <T>(items: T[], scope: MemoryScope) => items.map(item => ({ ...item, scope }));
+    const merged = {
+      ...first,
+      recentChanges: tag(first.recentChanges, first.scope),
+      activeCommitments: tag(first.activeCommitments, first.scope),
+      recentActivity: tag(first.recentActivity, first.scope),
+    };
+    for (const p of rest) {
+      merged.summary += `\n${p.summary}`;
+      merged.keyFacts.push(...p.keyFacts);
+      merged.recentChanges.push(...tag(p.recentChanges, p.scope));
+      merged.activeCommitments.push(...tag(p.activeCommitments, p.scope));
+      merged.recentActivity.push(...tag(p.recentActivity, p.scope));
+      merged.contradictions.push(...p.contradictions);
       for (const [entity, facts] of Object.entries(p.clusteredFacts)) {
-        (acc.clusteredFacts[entity] ??= []).push(...facts);
+        (merged.clusteredFacts[entity] ??= []).push(...facts);
       }
-      return acc;
-    }, first);
+    }
     merged.topEntities = this.entities().slice(0, 20);
     return merged;
   }

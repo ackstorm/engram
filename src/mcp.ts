@@ -33,6 +33,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createServer as createHttpServer } from 'node:http';
 import { z } from 'zod';
 import { MemoryRouter } from './router.js';
+import { formatScopedResults } from './mcp-format.js';
 import { resolveVaultPath, isSingleStoreMode, resolveProject } from './config.js';
 import path from 'path';
 import { homedir } from 'os';
@@ -191,13 +192,7 @@ server.tool(
       asOf: args.asOf,
     });
 
-    if (memories.length === 0) {
-      return { content: [{ type: 'text', text: 'No relevant memories found.' }] };
-    }
-    const formatted = memories.map((m, i) =>
-      `[${i + 1}] (${m.type}, salience=${m.salience.toFixed(2)}, status=${m.status})\n${m.content}\nEntities: ${m.entities.join(', ') || 'none'} | Topics: ${m.topics.join(', ') || 'none'}`
-    ).join('\n\n');
-    return { content: [{ type: 'text', text: `Found ${memories.length} memories:\n\n${formatted}` }] };
+    return { content: [{ type: 'text', text: formatScopedResults(memories) }] };
   },
 );
 
@@ -425,9 +420,10 @@ server.tool(
     const result = await router.ask(args.question, { limit: args.limit });
 
     // Build source summary lines
-    const sourceLines = result.sources.slice(0, 5).map((s, i) =>
-      `  ${i + 1}. [${s.confidenceLabel}] ${s.snippet} (${s.type}, ${s.ageDays}d ago${s.reinforcementCount > 0 ? `, ${s.reinforcementCount}x reinforced` : ''})`
+    const sourceLines = result.sources.slice(0, 5).map((s: any, i) =>
+      `  ${i + 1}. [${s.scope} · ${s.confidenceLabel}] ${s.snippet} (${s.type}, ${s.ageDays}d ago${s.reinforcementCount > 0 ? `, ${s.reinforcementCount}x reinforced` : ''})`
     );
+    const scopesInAnswer = new Set(result.sources.map((s: any) => s.scope));
 
     const output = [
       `**Answer** (${result.confidence} confidence):`,
@@ -439,6 +435,7 @@ server.tool(
       ...(result.sources.length > 5 ? [`  ... and ${result.sources.length - 5} more`] : []),
       '',
       `_Evidence: avg confidence ${result.evidenceQuality.avgConfidence}, newest ${result.evidenceQuality.newestMemoryAgeDays}d ago, oldest ${result.evidenceQuality.oldestMemoryAgeDays}d ago | ~${result.tokenEstimate} tokens_`,
+      ...(scopesInAnswer.size > 1 ? ['', 'Note: project-scoped memories take precedence over global ones where they conflict.'] : []),
     ].join('\n');
     return { content: [{ type: 'text', text: output }] };
   },
@@ -563,13 +560,17 @@ server.tool(
     }
 
     const formatted = results.map((r, i) =>
-      `[${i + 1}] (relevance: ${r.relevance.toFixed(2)}) ${r.memory.content}\n    Why: ${r.reason}\n    Path: ${r.activationPath}`
+      `[${i + 1}] [${r.memory.scope}] (relevance: ${r.relevance.toFixed(2)}) ${r.memory.content}\n    Why: ${r.reason}\n    Path: ${r.activationPath}`
     ).join('\n\n');
+    const scopesSurfaced = new Set(results.map(r => r.memory.scope));
+    const footer = scopesSurfaced.size > 1
+      ? '\n\nNote: project-scoped memories take precedence over global ones where they conflict.'
+      : '';
 
     return {
       content: [{
         type: 'text',
-        text: `💡 ${results.length} memories surfaced:\n\n${formatted}`,
+        text: `💡 ${results.length} memories surfaced:\n\n${formatted}${footer}`,
       }],
     };
   },
@@ -624,7 +625,7 @@ server.tool(
     if (briefing.recentChanges && briefing.recentChanges.length > 0) {
       const changeLines = briefing.recentChanges.slice(0, 10).map(c => {
         const icon = c.type === 'correction' ? '🔄' : c.type === 'commitment' ? '⏳' : c.type === 'event' ? '📝' : '💡';
-        return `- ${icon} ${c.content.slice(0, 120)}`;
+        return `- ${icon} [${c.scope}] ${c.content.slice(0, 120)}`;
       });
       sections.push(`\n### What Changed Recently\n${changeLines.join('\n')}`);
     }
@@ -652,7 +653,7 @@ server.tool(
     }
 
     if (briefing.activeCommitments.length > 0) {
-      const commitLines = briefing.activeCommitments.map(c => `- ⏳ ${c.content}`);
+      const commitLines = briefing.activeCommitments.map(c => `- ⏳ [${c.scope}] ${c.content}`);
       sections.push(`\n### Pending Commitments\n${commitLines.join('\n')}`);
     }
 
@@ -665,7 +666,7 @@ server.tool(
     }
 
     if (briefing.recentActivity.length > 0) {
-      const actLines = briefing.recentActivity.map(a => `- ${a.content.slice(0, 100)}`);
+      const actLines = briefing.recentActivity.map(a => `- [${a.scope}] ${a.content.slice(0, 100)}`);
       sections.push(`\n### Recent Activity\n${actLines.join('\n')}`);
     }
 
@@ -674,6 +675,15 @@ server.tool(
         `- "${c.a.slice(0, 60)}..." vs "${c.b.slice(0, 60)}..."`
       );
       sections.push(`\n### Contradictions to Resolve\n${conLines.join('\n')}`);
+    }
+
+    const briefedScopes = new Set([
+      ...briefing.recentChanges.map(c => c.scope),
+      ...briefing.activeCommitments.map(c => c.scope),
+      ...briefing.recentActivity.map(a => a.scope),
+    ]);
+    if (briefedScopes.size > 1) {
+      sections.push('\nNote: project-scoped memories take precedence over global ones where they conflict.');
     }
 
     return {
