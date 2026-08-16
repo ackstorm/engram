@@ -175,7 +175,7 @@ function red(s: string) { return `\x1b[31m${s}\x1b[0m`; }
 // ============================================================
 
 async function runInit(values: Record<string, unknown>) {
-  const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import('fs');
+  const { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } = await import('fs');
   const { homedir } = await import('os');
   const { join } = await import('path');
   const { createInterface } = await import('readline');
@@ -504,6 +504,23 @@ async function runInit(values: Record<string, unknown>) {
       }
     } catch {
       // Non-critical — user will just get prompted to approve
+    }
+  }
+
+  // 5d. Install the engram-memory teaching skill (scope, type, precedence, engram_move)
+  if (hasClaudeDir) {
+    try {
+      const here = path.dirname(new URL(import.meta.url).pathname);
+      // dist/cli.js and src/cli.ts are both one level below the package root.
+      const skillSrc = path.join(here, '..', 'skills', 'engram-memory', 'SKILL.md');
+      if (existsSync(skillSrc)) {
+        const skillDestDir = join(home, '.claude', 'skills', 'engram-memory');
+        mkdirSync(skillDestDir, { recursive: true });
+        copyFileSync(skillSrc, join(skillDestDir, 'SKILL.md'));
+        console.log(`  ${green('✓')} Installed engram-memory skill`);
+      }
+    } catch {
+      // Non-critical — MCP tool descriptions already teach scope/type.
     }
   }
 
