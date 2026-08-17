@@ -471,6 +471,46 @@ describe('Authentication', () => {
   });
 });
 
+// Multi-tenant mode looks the tenant up by the bearer value itself, so the
+// lookup must not walk the prototype chain: `Bearer __proto__` used to resolve
+// to a truthy value and open a vault at ~/.engram/undefined.db.
+describe('Multi-tenant authentication', () => {
+  let mtUrl: string;
+  let mtServer: ReturnType<typeof createEngramServer>;
+  const TENANT_KEY = 'tenant-key-xyz';
+
+  beforeAll(async () => {
+    const port = 39000 + Math.floor(Math.random() * 900);
+    mtServer = createEngramServer({
+      port,
+      host: '127.0.0.1',
+      authToken: TEST_TOKEN,
+      vaults: { [TENANT_KEY]: { owner: 'tenant-a', dbPath: join(tmpDir, 'tenant-a.db') } },
+    });
+    await mtServer.listen();
+    mtUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => { await mtServer.close(); });
+
+  it('accepts a registered tenant key', async () => {
+    const res = await fetch(`${mtUrl}/v1/stats`, {
+      headers: { Authorization: `Bearer ${TENANT_KEY}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it.each(['__proto__', 'constructor', 'toString', 'valueOf'])(
+    'rejects the prototype-chain key %s',
+    async key => {
+      const res = await fetch(`${mtUrl}/v1/stats`, {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      expect(res.status).toBe(401);
+    },
+  );
+});
+
 describe('CORS', () => {
   it('sends no ACAO header when no allowlist is configured', async () => {
     const res = await fetch(`${baseUrl}/health`, {

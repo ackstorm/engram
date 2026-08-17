@@ -6,9 +6,13 @@
 // ~/.claude/CLAUDE.md and ./CLAUDE.md. Writes are explicitly targeted; reads
 // merge both. Vault itself stays single-store and knows nothing about scope.
 //
-// Merging is a plain concatenate-and-sort because nothing in the scoring
-// pipeline is corpus-relative (no IDF, no collection-size normalisation) and
-// both stores share one embedding configuration, so scores are comparable.
+// Merging is a plain concatenate-and-sort. Both stores share one embedding
+// configuration, so the semantic component lives in one vector space and is
+// directly comparable. The lexical component is not: BM25 weights by IDF, so
+// the same term scores differently in each store. It is bounded rather than
+// eliminated — at the default alpha it is 10% of a 0.6 primary — except in a
+// vault opted out of embeddings, where it is the whole signal. See
+// docs/references/memory-scope-and-types.md.
 
 import { Vault } from './vault.js';
 import { createEmbedder } from './embeddings.js';

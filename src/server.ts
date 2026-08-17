@@ -682,8 +682,14 @@ export function createEngramServer(config: ServerConfig) {
     }
 
     // Multi-tenant: the bearer value selects the tenant's router.
+    //
+    // hasOwn, not a truthiness check on config.vaults[apiKey]: a bearer of
+    // "__proto__" or "constructor" resolves up the prototype chain to a truthy
+    // value, passing the tenant check and opening an unintended vault with
+    // full read/write.
     if (!authHeader?.startsWith('Bearer ')) return null;
     const apiKey = authHeader.slice(7);
+    if (!Object.hasOwn(config.vaults, apiKey)) return null;
     const vaultConfig = config.vaults[apiKey];
     if (!vaultConfig) return null;
     return getOrCreateRouter(vaultConfig);

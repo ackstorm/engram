@@ -19,19 +19,35 @@ import type { Memory, Edge, Entity, RememberParsed } from './types.js';
  * badly: d=1.13 is cosine 0.36, but `1 - d` reads as -0.13.
  */
 /**
+ * English function words that carry no retrieval signal. An explicit list
+ * rather than a length cutoff: `t.length > 2` dropped "go", "ts", "js", "ci",
+ * "db" and "ai" — all searchable technical terms — while letting "the", "our"
+ * and "was" straight through.
+ *
+ * It stays short on purpose. Near-zero-IDF hits are discarded by
+ * BM25_NOISE_FLOOR in vault.ts anyway, so this only spares the index work; it
+ * is not what makes stopwords harmless.
+ */
+const STOPWORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'did', 'do',
+  'does', 'for', 'from', 'had', 'has', 'have', 'how', 'i', 'if', 'in', 'is',
+  'it', 'its', 'me', 'my', 'not', 'of', 'on', 'or', 'our', 'so', 'than',
+  'that', 'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this',
+  'to', 'was', 'we', 'were', 'what', 'when', 'where', 'which', 'who', 'why',
+  'will', 'with', 'would', 'you', 'your',
+]);
+
+/**
  * Split a query into BM25 terms. Exported so the scorer can count terms without
  * re-deriving them — a mismatch between what is searched and what is counted
  * would silently mis-calibrate the score normalisation.
- *
- * Two-letter tokens are almost entirely stopwords ("is", "we", "do", "of").
- * They match nearly every memory and contribute no IDF.
  */
 export function tokenizeQuery(query: string): string[] {
   return query
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .split(/\s+/)
-    .filter(t => t.length > 2);
+    .filter(t => t.length > 0 && !STOPWORDS.has(t));
 }
 
 export function cosineFromL2(distance: number): number {

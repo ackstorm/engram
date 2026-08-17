@@ -51,48 +51,6 @@ async function withRetry<T>(
 // ============================================================
 
 /**
- * Combine the semantic and lexical retrievers into a base score in [0, 0.6].
- *
- * Cosine similarity is used directly because it carries real dynamic range —
- * that range is what lets relevance outweigh the salience/stability multiplier
- * applied later (which spans 0.64-0.89, a factor of 1.39). BM25 scores are
- * unbounded and corpus-dependent, so they are min-max normalised within the
- * query before blending.
- *
- * Weights are renormalised over the retrievers that actually ran, so a vault
- * with no embedder still gets the full 0.6 ceiling from lexical search alone.
- */
-/**
- * Min-max normalise cosine similarities within a single query.
- *
- * Absolute cosine ranges are model-specific and compressed: measured against
- * text-embedding-3-small, a strongly relevant memory scores 0.36 and an
- * unrelated one 0.09. Feeding those raw into a 0.6-weighted primary signal
- * yields 0.05-0.22, which loses to the entity boost (0.25-0.35) and to the
- * additive recency boost (0.25) — the primary retriever gets outvoted by its
- * own tie-breakers.
- *
- * Normalising within the query makes the best semantic hit worth the full
- * weight regardless of the model's scale. This is what Weaviate's
- * relativeScoreFusion does, and why it replaced rank-based fusion as their
- * default in v1.24.
- */
-export function normaliseCosine(
-  hits: Array<{ memoryId: string; similarity: number }>,
-): Map<string, number> {
-  const out = new Map<string, number>();
-  if (hits.length === 0) return out;
-  const values = hits.map(h => h.similarity);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-  for (const h of hits) {
-    out.set(h.memoryId, span === 0 ? 1 : (h.similarity - min) / span);
-  }
-  return out;
-}
-
-/**
  * How large the strongest entity/topic boost may be relative to the strongest
  * primary retrieval score in the same query. mem0 uses the same idea, capping
  * its entity boost at 0.5 against a semantic score of 1.0.
@@ -121,6 +79,20 @@ function hybridAlpha(): number {
 }
 
 
+/**
+ * Combine the semantic and lexical retrievers into a base score in [0, 0.6].
+ *
+ * Cosine similarity is used raw because it carries real dynamic range — that
+ * range is what lets relevance outweigh the salience/stability multiplier
+ * applied later (which spans 0.64-0.89, a factor of 1.39). It is deliberately
+ * NOT normalised within the query: each store normalises independently, so a
+ * store holding nothing relevant would still emit a 1.0 and win the merge.
+ *
+ * BM25 arrives already mapped into [0,1] by normaliseBm25 below.
+ *
+ * Weights are renormalised over the retrievers that actually ran, so a vault
+ * with no embedder still gets the full 0.6 ceiling from lexical search alone.
+ */
 export function fuseRetrievalScores(
   vectorSimilarity: Map<string, number>,
   bm25Normalised: Map<string, number>,

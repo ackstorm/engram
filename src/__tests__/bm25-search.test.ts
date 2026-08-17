@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { MemoryStore } from '../store.js';
+import { MemoryStore, tokenizeQuery } from '../store.js';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -55,5 +55,30 @@ describe('BM25 search', () => {
   it('survives FTS5 punctuation without throwing', () => {
     store.createMemory({ content: 'a memory' } as any);
     expect(() => store.searchBM25('what is "this" AND (that)?', 10)).not.toThrow();
+  });
+});
+
+describe('tokenizeQuery', () => {
+  // The previous `t.length > 2` filter made these unsearchable.
+  it.each(['go', 'ts', 'js', 'ci', 'db', 'ai'])('keeps the technical term %s', term => {
+    expect(tokenizeQuery(`the ${term} setup`)).toEqual([term, 'setup']);
+  });
+
+  it('drops function words a length cutoff would have kept', () => {
+    expect(tokenizeQuery('what was the reason for our outage')).toEqual(['reason', 'outage']);
+  });
+
+  it('returns nothing when the query is all function words', () => {
+    expect(tokenizeQuery('what is it')).toEqual([]);
+  });
+});
+
+describe('two-letter search end to end', () => {
+  it('finds a memory by a two-letter term', () => {
+    store.createMemory({ content: 'the ci pipeline runs on buildkite' } as any);
+    store.createMemory({ content: 'unrelated note about postgres tuning' } as any);
+    const hits = store.searchBM25('ci', 10);
+    expect(hits.length).toBe(1);
+    expect(store.getMemoryDirect(hits[0].id)!.content).toContain('buildkite');
   });
 });

@@ -65,11 +65,27 @@ The compensation is presentational precedence (below) and merged reads.
 
 `recall` and every other read default to reading both stores and merging.
 
-Merging is a plain concatenate-and-sort. Nothing in the scoring pipeline is
-corpus-relative — `vault.ts:846` scores from salience, stability, type bonus, confidence
-and recency, all per-memory properties, and there is no IDF or collection-size
-normalisation anywhere. One embedding configuration (process-global, env-derived) means
-both stores share a vector space. So scores from the two stores are directly comparable.
+Merging is a plain concatenate-and-sort. Most of the pipeline is per-memory and so
+corpus-independent: salience, stability, type bonus, confidence and recency are all
+properties of the memory itself. One embedding configuration (process-global,
+env-derived) means both stores share a vector space, so the semantic component is
+directly comparable too.
+
+**The lexical component is the exception.** BM25 weights each term by inverse document
+frequency, so the same word scores differently depending on how common it is *in that
+store* — measured, "linter" scores 0.45 where it is rare and ~1e-6 where it appears in
+every row. A strong match in a small project store can therefore lose to a weaker match
+in a larger global store.
+
+This is bounded rather than fixed. At the default `ENGRAM_HYBRID_ALPHA` of 0.9 the
+lexical component is 10% of a 0.6 primary score — at most 0.06 of swing — and embeddings
+are mandatory, so the semantic component always dominates. The exception is a vault run
+with `ENGRAM_ALLOW_NO_EMBEDDER=1`, where lexical is the entire signal and the merge is
+fully corpus-relative. Do not run a two-store deployment that way.
+
+Removing the exception outright means normalising BM25 within each result set, which
+trades this problem for a worse one: a store holding nothing relevant would still promote
+its least-bad hit to full marks. See the rejected-changes table in `eval/README.md`.
 
 Each store runs at the **full** `limit`; the merged list is truncated afterwards.
 Allocating the limit per-store beforehand would starve whichever store holds the better
