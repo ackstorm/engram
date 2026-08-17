@@ -85,66 +85,6 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
 
 
 // ============================================================
-// Local/Minimal Embeddings (for testing without API keys)
-// ============================================================
-
-/**
- * Simple bag-of-words TF embedding for testing purposes.
- * NOT suitable for production — use OpenAI or another real provider.
- * But allows the full pipeline to work without API keys.
- */
-export class LocalEmbeddings implements EmbeddingProvider {
-  private dims: number;
-  private vocabulary: Map<string, number> = new Map();
-  private nextSlot = 0;
-
-  constructor(dims: number = 256) {
-    this.dims = dims;
-  }
-
-  async embed(text: string): Promise<number[]> {
-    const vec = new Float32Array(this.dims);
-    const words = this.tokenize(text);
-
-    for (const word of words) {
-      let slot = this.vocabulary.get(word);
-      if (slot === undefined) {
-        slot = this.nextSlot % this.dims;
-        this.vocabulary.set(word, slot);
-        this.nextSlot++;
-      }
-      vec[slot] += 1;
-    }
-
-    // Normalize to unit vector
-    const magnitude = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
-    if (magnitude > 0) {
-      for (let i = 0; i < this.dims; i++) {
-        vec[i] /= magnitude;
-      }
-    }
-
-    return Array.from(vec);
-  }
-
-  async embedBatch(texts: string[]): Promise<number[][]> {
-    return Promise.all(texts.map(t => this.embed(t)));
-  }
-
-  dimensions(): number {
-    return this.dims;
-  }
-
-  private tokenize(text: string): string[] {
-    return text
-      .toLowerCase()
-      .replace(/[^\w\s]/g, '')
-      .split(/\s+/)
-      .filter(w => w.length > 1);
-  }
-}
-
-// ============================================================
 // Factory — the single place an embedder is chosen
 // ============================================================
 

@@ -6,7 +6,7 @@
 // The ingested vault is cached in bench/locomo/.cache/conv<i>.db — delete it
 // to re-ingest (embedding config is immutable per vault).
 
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import path from 'path';
 import { Vault } from '../../src/vault.js';
 import { createEmbedder } from '../../src/embeddings.js';
@@ -36,9 +36,9 @@ const cacheDir = path.join(import.meta.dirname, '.cache');
 mkdirSync(cacheDir, { recursive: true });
 const dbPath = path.join(cacheDir, `conv${convIndex}.db`);
 const fresh = !existsSync(dbPath);
-const vault = new Vault({ owner: `locomo-conv${convIndex}`, dbPath }, embedder);
 
 if (fresh) {
+  const vault = new Vault({ owner: `locomo-conv${convIndex}`, dbPath }, embedder);
   const conv = sample.conversation;
   let ingested = 0;
   for (const key of Object.keys(conv)) {
@@ -62,10 +62,17 @@ if (fresh) {
   for (let i = 0; i < 5; i++) {
     if ((await vault.backfillEmbeddings()) === 0) break;
   }
+  await vault.close();
   console.log(`\ringested ${ingested} turns (${sample.sample_id})`);
 } else {
   console.log(`reusing cached vault ${dbPath}`);
 }
+
+// Query a throwaway copy — recallScored bumps access counts/stability on every
+// hit, which would pollute the cached vault across questions... across runs.
+const workPath = `${dbPath}.work`;
+copyFileSync(dbPath, workPath);
+const vault = new Vault({ owner: `locomo-conv${convIndex}`, dbPath: workPath }, embedder);
 
 const qas = (sample.qa as QA[]).filter(q => q.category !== 5 && q.evidence?.length);
 console.log(`${qas.length} questions with gold evidence (adversarial skipped)\n`);
@@ -105,3 +112,4 @@ for (const cat of [...new Set(rows.map(r => r.category))].sort()) {
 }
 
 await vault.close();
+rmSync(workPath, { force: true });

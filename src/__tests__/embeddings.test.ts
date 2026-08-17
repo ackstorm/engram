@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Vault } from '../vault.js';
-import { LocalEmbeddings } from '../embeddings.js';
+import { HashEmbedder } from './helpers/hash-embedder.js';
 import type { VaultConfig } from '../types.js';
 import fs from 'fs';
 import path from 'path';
@@ -16,14 +16,14 @@ function cleanup(dbPath: string) {
   }
 }
 
-describe('Vector Search with LocalEmbeddings', () => {
+describe('Vector Search with a stub embedder', () => {
   let vault: Vault;
   let dbPath: string;
-  let embedder: LocalEmbeddings;
+  let embedder: HashEmbedder;
 
   beforeEach(() => {
     dbPath = tmpDbPath();
-    embedder = new LocalEmbeddings(128);
+    embedder = new HashEmbedder(128);
     vault = new Vault(
       {
         owner: 'vec-test',
@@ -81,7 +81,7 @@ describe('Vector Search with LocalEmbeddings', () => {
     expect(results.length).toBeGreaterThan(0);
   });
 
-  it('LocalEmbeddings produces consistent vectors for same input', async () => {
+  it('produces consistent vectors for same input', async () => {
     const text = 'Hello world test';
     const v1 = await embedder.embed(text);
     const v2 = await embedder.embed(text);
@@ -90,7 +90,22 @@ describe('Vector Search with LocalEmbeddings', () => {
     expect(v1.length).toBe(128);
   });
 
-  it('LocalEmbeddings produces unit vectors', async () => {
+  // The defect that got LocalEmbeddings deleted: it assigned vector slots in
+  // first-seen order and held the mapping in memory, so a fresh process
+  // embedded the same text to an orthogonal vector (cosine 0.000) and every
+  // vector already in the vault became noise.
+  it('embeds identically from a fresh instance, whatever it saw first', async () => {
+    const warmed = new HashEmbedder(128);
+    await warmed.embed('completely unrelated preamble about kubernetes');
+
+    const text = 'the deploy pipeline uses argocd';
+    const fromFresh = await new HashEmbedder(128).embed(text);
+    const fromWarmed = await warmed.embed(text);
+
+    expect(fromWarmed).toEqual(fromFresh);
+  });
+
+  it('produces unit vectors', async () => {
     const vec = await embedder.embed('Some test text for normalization check');
     const magnitude = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
     expect(magnitude).toBeCloseTo(1.0, 5);

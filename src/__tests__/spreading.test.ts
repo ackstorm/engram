@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Vault } from '../vault.js';
-import { LocalEmbeddings } from '../embeddings.js';
+import { HashEmbedder } from './helpers/hash-embedder.js';
 import type { VaultConfig, Memory } from '../types.js';
 import { unlinkSync, existsSync } from 'fs';
 
@@ -13,7 +13,7 @@ const TEST_DB = '/tmp/engram-spreading-test.db';
 function makeVault(): Vault {
   if (existsSync(TEST_DB)) unlinkSync(TEST_DB);
   const config: VaultConfig = { owner: 'test', dbPath: TEST_DB };
-  return new Vault(config, new LocalEmbeddings());
+  return new Vault(config, new HashEmbedder());
 }
 
 describe('Spreading Activation', () => {
