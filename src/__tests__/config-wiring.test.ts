@@ -8,11 +8,11 @@ import { GeminiEmbeddings } from '../embeddings.js';
 
 let stub: Server;
 let stubUrl: string;
-const received: Array<{ url: string }> = [];
+const received: Array<{ url: string; headers: Record<string, string | string[] | undefined> }> = [];
 
 beforeAll(async () => {
   stub = createServer((req, res) => {
-    received.push({ url: req.url! });
+    received.push({ url: req.url!, headers: req.headers });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ embedding: { values: [0.1, 0.2, 0.3] } }));
   });
@@ -34,9 +34,11 @@ describe('GOOGLE_GEMINI_BASE_URL', () => {
       const vec = await embedder.embed('hello');
       expect(vec).toEqual([0.1, 0.2, 0.3]);
       expect(received).toHaveLength(1);
-      expect(received[0].url).toBe(
-        '/v1beta/models/test-embed-model:embedContent?key=test-key',
-      );
+      expect(received[0].url).toBe('/v1beta/models/test-embed-model:embedContent');
+      // The key travels in a header, never the URL — request URLs are logged
+      // in full by every proxy between here and the API.
+      expect(received[0].url).not.toContain('test-key');
+      expect(received[0].headers['x-goog-api-key']).toBe('test-key');
     } finally {
       if (prev === undefined) delete process.env.GOOGLE_GEMINI_BASE_URL;
       else process.env.GOOGLE_GEMINI_BASE_URL = prev;

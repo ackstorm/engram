@@ -18,9 +18,21 @@ export function geminiBaseUrl(): string {
   return (raw || DEFAULT_GEMINI_BASE_URL).replace(/\/+$/, '');
 }
 
-/** Build a Gemini REST endpoint, e.g. geminiEndpoint(model, 'generateContent', key). */
-export function geminiEndpoint(model: string, method: string, apiKey: string): string {
-  return `${geminiBaseUrl()}/v1beta/models/${model}:${method}?key=${encodeURIComponent(apiKey)}`;
+/**
+ * Build a Gemini REST endpoint, e.g. geminiEndpoint(model, 'generateContent').
+ *
+ * The API key is deliberately NOT in the query string. Request URLs are logged
+ * in full by proxies, gateways and CDNs, so `?key=` writes the credential into
+ * every access log between here and Google. Pass it via geminiHeaders instead —
+ * which is what Google's own SDK does.
+ */
+export function geminiEndpoint(model: string, method: string): string {
+  return `${geminiBaseUrl()}/v1beta/models/${model}:${method}`;
+}
+
+/** Headers for a Gemini REST call, carrying the API key out of the URL. */
+export function geminiHeaders(apiKey: string): Record<string, string> {
+  return { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey };
 }
 
 /**

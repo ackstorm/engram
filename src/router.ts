@@ -378,6 +378,11 @@ export class MemoryRouter {
     const edgesDropped = source.edgeCount(id);
     const { scope: _drop, ...memory } = found;
 
+    // ponytail: not atomic — two SQLite files cannot share a transaction, so a
+    // crash between the import and the forget leaves the memory in both stores.
+    // Import-then-forget rather than the reverse, so the failure mode is a
+    // duplicate (visible, fixable with another move) instead of data loss.
+    // A move journal in one store, replayed on open, would close it.
     const destination = this.vaultFor(to);
     destination.importMemory(memory as Memory);
     const vector = source.getEmbeddingVector(id);

@@ -4,6 +4,7 @@
 
 import {
   geminiEndpoint,
+  geminiHeaders,
   resolveEmbeddingModel,
   resolveEmbeddingDims,
   resolveModelProvider,
@@ -136,10 +137,10 @@ export class GeminiEmbeddings implements EmbeddingProvider {
   async embed(text: string): Promise<number[]> {
     return withRetry(async () => {
       const response = await fetch(
-        geminiEndpoint(this.model, 'embedContent', this.apiKey),
+        geminiEndpoint(this.model, 'embedContent'),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: geminiHeaders(this.apiKey),
           body: JSON.stringify({
             model: `models/${this.model}`,
             content: { parts: [{ text }] },
@@ -160,10 +161,10 @@ export class GeminiEmbeddings implements EmbeddingProvider {
   async embedBatch(texts: string[]): Promise<number[][]> {
     return withRetry(async () => {
       const response = await fetch(
-        geminiEndpoint(this.model, 'batchEmbedContents', this.apiKey),
+        geminiEndpoint(this.model, 'batchEmbedContents'),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: geminiHeaders(this.apiKey),
           body: JSON.stringify({
             requests: texts.map(text => ({
               model: `models/${this.model}`,

@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import path from 'path';
 import os from 'os';
 import { z } from 'zod';
-import { geminiEndpoint, resolveLlmModel, type MemoryScope } from './config.js';
+import { geminiEndpoint, geminiHeaders, resolveLlmModel, type MemoryScope } from './config.js';
 import { resolveCorsOrigin, corsAllowlist, requireAuthToken, checkBearerToken } from './config.js';
 
 const ScopeSchema = z.enum(['project', 'global']);
@@ -21,6 +21,25 @@ function requireScope(body: any, res: import('node:http').ServerResponse): Memor
     return null;
   }
   return parsed.data;
+}
+
+/**
+ * Scope on a read, where it is optional — absent means both stores. A present
+ * but invalid value is rejected rather than ignored: dropping it silently
+ * widens the search to both stores, which is the opposite of what a caller
+ * who typed a scope wanted. Sends the 400 itself and reports ok: false.
+ */
+function optionalScope(
+  raw: unknown,
+  res: import('node:http').ServerResponse,
+): { ok: boolean; scope?: MemoryScope } {
+  if (raw === undefined || raw === null) return { ok: true };
+  const parsed = ScopeSchema.safeParse(raw);
+  if (!parsed.success) {
+    error(res, 400, "scope must be 'project' or 'global'");
+    return { ok: false };
+  }
+  return { ok: true, scope: parsed.data };
 }
 
 // ============================================================
@@ -92,12 +111,55 @@ function getOrCreateRouter(config: VaultConfig): MemoryRouter {
 // Request parsing helpers
 // ============================================================
 
+/**
+ * An error carrying the status the client should see. Thrown by the parsing
+ * helpers and mapped by the dispatcher, so a malformed request reads as the
+ * client's fault instead of surfacing as a 500.
+ */
+class HttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+/**
+ * Largest accepted request body. Every endpoint is behind the bearer token, so
+ * this is not an anti-DoS measure — it bounds what a single authenticated
+ * mistake (a whole transcript posted to /v1/memories, a runaway loop) can hold
+ * in memory. /v1/ingest takes real conversation text, so it cannot be small.
+ */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
 async function readBody(req: import('node:http').IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    size += buf.length;
+    if (size > MAX_BODY_BYTES) {
+      req.destroy();
+      throw new HttpError(413, `Request body exceeds ${MAX_BODY_BYTES} bytes`);
+    }
+    chunks.push(buf);
   }
   return Buffer.concat(chunks).toString('utf-8');
+}
+
+/**
+ * Read and parse a JSON body, treating an empty one as {}. Handlers used to
+ * call JSON.parse(await readBody(req)) directly, so any malformed body threw
+ * out of the handler and the dispatcher reported it as a 500 — a server error
+ * for a client mistake. Endpoints whose body is entirely optional get the {}
+ * for free; the rest fail their own field validation with a 400.
+ */
+async function readJson(req: import('node:http').IncomingMessage): Promise<any> {
+  const raw = (await readBody(req)).trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new HttpError(400, 'Malformed JSON body');
+  }
 }
 
 function json(res: import('node:http').ServerResponse, status: number, data: unknown) {
@@ -169,7 +231,7 @@ function route(method: string, path: string, handler: RouteHandler) {
 
 // POST /v1/memories — remember()
 route('POST', '/v1/memories', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const scope = requireScope(body, res);
   if (!scope) return;
   const { scope: _drop, ...input } = body;
@@ -186,8 +248,9 @@ route('GET', '/v1/memories/recall', async (req, res, router) => {
     return;
   }
   const input: Record<string, unknown> = { context };
-  const scope = url.searchParams.get('scope');
-  if (ScopeSchema.safeParse(scope).success) input.scope = scope;
+  const scope = optionalScope(url.searchParams.get('scope'), res);
+  if (!scope.ok) return;
+  if (scope.scope) input.scope = scope.scope;
   const entities = url.searchParams.get('entities');
   if (entities) input.entities = entities.split(',');
   const topics = url.searchParams.get('topics');
@@ -219,7 +282,8 @@ route('GET', '/v1/memories/recall', async (req, res, router) => {
 
 // POST /v1/memories/recall — recall() with body (for complex queries)
 route('POST', '/v1/memories/recall', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
+  if (!optionalScope(body?.scope, res).ok) return;
   const memories = await router.recall(body);
   const response: Record<string, unknown> = { memories, count: memories.length };
   attachAttribution(response, router.vaultFor('global'));
@@ -244,7 +308,7 @@ route('DELETE', '/v1/memories/:id', (req, res, router, params) => {
 
 // PATCH /v1/memories/:id — update a memory's fields
 route('PATCH', '/v1/memories/:id', async (req, res, router, params) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const updated = router.updateMemoryById(params.id, {
     content: body.content,
     type: body.type,
@@ -271,7 +335,7 @@ route('GET', '/v1/memories/:id/neighbors', (req, res, router, params) => {
 
 // POST /v1/move — relocate a memory between scopes
 route('POST', '/v1/move', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const scope = requireScope(body, res);
   if (!scope) return;
   if (!body.id || typeof body.id !== 'string') {
@@ -284,7 +348,7 @@ route('POST', '/v1/move', async (req, res, router) => {
 
 // POST /v1/connections — connect()
 route('POST', '/v1/connections', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const { sourceId, targetId, type, strength } = body;
   if (!sourceId || !targetId || !type) {
     error(res, 400, 'sourceId, targetId, and type are required');
@@ -298,8 +362,7 @@ route('POST', '/v1/connections', async (req, res, router) => {
 // Body: { since?: string, all?: boolean }
 // Returns one report per store, keyed by scope; a scope with no store is null.
 route('POST', '/v1/consolidate', async (req, res, router) => {
-  const raw = await readBody(req).catch(() => '{}');
-  const body = JSON.parse(raw || '{}');
+  const body = await readJson(req);
   const reports = await router.consolidate({ since: body.since, all: body.all });
   json(res, 200, reports);
 });
@@ -328,7 +391,7 @@ route('POST', '/v1/embeddings/backfill', async (req, res, router) => {
 
 // POST /v1/ingest — auto-extract memories from raw conversation text
 route('POST', '/v1/ingest', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const { text, content, transcript } = body;
   const rawText = text ?? content ?? transcript;
   if (!rawText || typeof rawText !== 'string') {
@@ -347,8 +410,7 @@ route('POST', '/v1/ingest', async (req, res, router) => {
 route('POST', '/v1/ingest/auto', async (req, res, _router) => {
   try {
     const { ingestNewMessages, loadState } = await import('./auto-ingest.js');
-    const body = await readBody(req).catch(() => '{}');
-    const parsed = JSON.parse(body || '{}');
+    const parsed = await readJson(req);
     const maxAgeDays = parsed.maxAgeDays ?? 1;
 
     const result = await ingestNewMessages(maxAgeDays);
@@ -370,7 +432,7 @@ route('POST', '/v1/ingest/auto', async (req, res, _router) => {
 // Asks every store and returns the best-supported answer, folding the other
 // store's sources in as supporting evidence.
 route('POST', '/v1/ask', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const result = await router.ask(body.question, {
     limit: body.limit,
     spread: body.spread,
@@ -403,7 +465,7 @@ route('GET', '/v1/alerts', async (req, res, router) => {
 
 // POST /v1/checkpoint — save context before it's lost (pre-compaction, session end)
 route('POST', '/v1/checkpoint', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   if (!body.summary || typeof body.summary !== 'string') {
     error(res, 400, 'summary field required (string — the context to save)');
     return;
@@ -425,7 +487,7 @@ route('POST', '/v1/checkpoint', async (req, res, router) => {
 
 // POST /v1/audit — cross-reference external content against vault
 route('POST', '/v1/audit', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   if (!body.content || typeof body.content !== 'string') {
     error(res, 400, 'content field required (string — the external text to audit)');
     return;
@@ -440,7 +502,7 @@ route('POST', '/v1/audit', async (req, res, router) => {
 
 // POST /v1/surface — proactive memory surfacing (memories pushed, not pulled)
 route('POST', '/v1/surface', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const { context, activeEntities, activeTopics, seen, minSalience, minHoursSinceAccess, limit, relevanceThreshold } = body;
   if (!context || typeof context !== 'string') {
     error(res, 400, 'context field is required (string)');
@@ -461,7 +523,7 @@ route('POST', '/v1/surface', async (req, res, router) => {
 
 // POST /v1/briefing — session briefing: structured context summary for session start
 route('POST', '/v1/briefing', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const context = body.context ?? body.topic ?? '';
   const limit = body.limit ?? 20;
   const briefing = await router.briefing(context, limit);
@@ -480,7 +542,7 @@ route('GET', '/v1/briefing', async (req, res, router) => {
 // POST /v1/shadow/compare — compare Engram briefing vs a memory file
 // Shadow mode: run Engram alongside existing memory, see what each catches
 route('POST', '/v1/shadow/compare', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const memoryFileContent = body.memoryFile ?? '';
   const context = body.context ?? '';
   const limit = body.limit ?? 20;
@@ -555,7 +617,7 @@ route('POST', '/v1/shadow/compare', async (req, res, router) => {
 // POST /v1/ingest/realtime — Real-time memory extraction from conversation text
 // Send a message or conversation snippet, get memories extracted and stored instantly
 route('POST', '/v1/ingest/realtime', async (req, res, router) => {
-  const body = JSON.parse(await readBody(req));
+  const body = await readJson(req);
   const text = body.text ?? '';
   const geminiKey = process.env.GEMINI_API_KEY ?? process.env.ENGRAM_LLM_API_KEY;
 
@@ -600,10 +662,10 @@ Respond as JSON:
 
   try {
     const response = await fetch(
-      geminiEndpoint(resolveLlmModel(), 'generateContent', geminiKey),
+      geminiEndpoint(resolveLlmModel(), 'generateContent'),
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: geminiHeaders(geminiKey),
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },
@@ -746,6 +808,12 @@ export function createEngramServer(config: ServerConfig) {
       try {
         await r.handler(req, res, router, params);
       } catch (err: any) {
+        // A malformed or oversized body is the client's fault, not ours —
+        // don't log it as a server error or report it as one.
+        if (err instanceof HttpError) {
+          error(res, err.status, err.message);
+          return;
+        }
         console.error(`Error handling ${req.method} ${pathname}:`, err);
         error(res, 500, err.message ?? 'Internal server error');
       }

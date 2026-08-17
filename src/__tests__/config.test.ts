@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   geminiBaseUrl,
   geminiEndpoint,
+  geminiHeaders,
   resolveLlmModel,
   resolveEmbeddingModel,
   corsAllowlist,
@@ -58,20 +59,31 @@ describe('geminiBaseUrl', () => {
 
 describe('geminiEndpoint', () => {
   it('builds a generateContent URL against the default host', () => {
-    expect(geminiEndpoint('gemini-flash-latest', 'generateContent', 'k1')).toBe(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=k1',
+    expect(geminiEndpoint('gemini-flash-latest', 'generateContent')).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
     );
   });
 
   it('builds against an overridden host', () => {
     process.env.GOOGLE_GEMINI_BASE_URL = 'https://proxy.example.com';
-    expect(geminiEndpoint('any-model', 'embedContent', 'k2')).toBe(
-      'https://proxy.example.com/v1beta/models/any-model:embedContent?key=k2',
+    expect(geminiEndpoint('any-model', 'embedContent')).toBe(
+      'https://proxy.example.com/v1beta/models/any-model:embedContent',
     );
   });
 
-  it('url-encodes the api key', () => {
-    expect(geminiEndpoint('m', 'generateContent', 'a b&c')).toContain('?key=a%20b%26c');
+  // Request URLs are logged in full by proxies and gateways, so the key must
+  // never reach the query string.
+  it('keeps the api key out of the URL', () => {
+    expect(geminiEndpoint('m', 'generateContent')).not.toContain('key=');
+  });
+});
+
+describe('geminiHeaders', () => {
+  it('carries the api key in the x-goog-api-key header', () => {
+    expect(geminiHeaders('k1')).toEqual({
+      'Content-Type': 'application/json',
+      'x-goog-api-key': 'k1',
+    });
   });
 });
 

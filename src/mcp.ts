@@ -25,7 +25,7 @@
 
 // Must be the first import — protects stdout before anything else can log.
 import './stdio-guard.js';
-import { geminiEndpoint, resolveLlmModel } from './config.js';
+import { geminiEndpoint, geminiHeaders, resolveLlmModel } from './config.js';
 import { requireAuthToken, checkBearerToken, resolveCorsOrigin, corsAllowlist } from './config.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -358,10 +358,10 @@ If nothing worth remembering: {"memories": []}`;
 
     try {
       const response = await fetch(
-        geminiEndpoint(resolveLlmModel(), 'generateContent', geminiKey),
+        geminiEndpoint(resolveLlmModel(), 'generateContent'),
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: geminiHeaders(geminiKey),
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },

@@ -16,7 +16,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { geminiEndpoint, resolveLlmModel } from './config.js';
+import { geminiEndpoint, geminiHeaders, resolveLlmModel } from './config.js';
 
 // ============================================================
 // Config
@@ -229,10 +229,10 @@ If nothing worth remembering, respond: {"memories": []}`;
 
   try {
     const response = await fetch(
-      geminiEndpoint(resolveLlmModel(), 'generateContent', GEMINI_API_KEY!),
+      geminiEndpoint(resolveLlmModel(), 'generateContent'),
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: geminiHeaders(GEMINI_API_KEY!),
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },
@@ -246,10 +246,10 @@ If nothing worth remembering, respond: {"memories": []}`;
         console.warn(`Gemini rate limited, waiting 15s and retrying...`);
         await new Promise(resolve => setTimeout(resolve, 15000));
         const retry = await fetch(
-          geminiEndpoint(resolveLlmModel(), 'generateContent', GEMINI_API_KEY!),
+          geminiEndpoint(resolveLlmModel(), 'generateContent'),
           {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: geminiHeaders(GEMINI_API_KEY!),
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }],
               generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },

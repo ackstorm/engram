@@ -292,7 +292,9 @@ describe('Error handling', () => {
     expect(status).toBe(404);
   });
 
-  it('500 on malformed JSON body', async () => {
+  // A body the client got wrong is a 4xx. These used to throw out of the
+  // handler and surface as 500s, blaming the server for the caller's mistake.
+  it('400 on malformed JSON body', async () => {
     const res = await fetch(`${baseUrl}/v1/memories`, {
       method: 'POST',
       headers: {
@@ -301,7 +303,32 @@ describe('Error handling', () => {
       },
       body: '{invalid json',
     });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/JSON/);
+  });
+
+  it('413 on a body over the size cap', async () => {
+    const res = await fetch(`${baseUrl}/v1/memories`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TEST_TOKEN}`,
+      },
+      body: JSON.stringify({ scope: 'global', content: 'x'.repeat(5 * 1024 * 1024) }),
+    }).catch(() => null);
+    // The server destroys the socket at the cap, so either the 413 lands or the
+    // connection dies first. Both are a rejection; neither is a stored memory.
+    if (res) expect(res.status).toBe(413);
+  });
+
+  it('rejects an invalid scope on recall instead of silently widening it', async () => {
+    const { status } = await api('POST', '/v1/memories/recall', {
+      context: 'anything', scope: 'universal',
+    });
+    expect(status).toBe(400);
+
+    const { status: getStatus } = await api('GET', '/v1/memories/recall?context=x&scope=universal');
+    expect(getStatus).toBe(400);
   });
 });
 

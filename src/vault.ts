@@ -7,7 +7,7 @@ import type { EmbeddingProvider } from './embeddings.js';
 import { extract } from './extract.js';
 import { calculateRecencyBoost, DEFAULT_TEMPORAL_CONFIG, findContradictionCandidates, verifyContradiction, temporalEdgeWeight } from './temporal.js';
 import type { TemporalConfig } from './temporal.js';
-import { geminiEndpoint, resolveLlmModel } from './config.js';
+import { geminiEndpoint, geminiHeaders, resolveLlmModel } from './config.js';
 
 // ============================================================
 // Retry helper for rate-limited API calls
@@ -2774,10 +2774,10 @@ Be conservative with explicit memories. Be observant with implicit ones — look
     if (config.provider === 'gemini') {
       return withRetry(async () => {
         const response = await fetch(
-          geminiEndpoint(model, 'generateContent', config.apiKey),
+          geminiEndpoint(model, 'generateContent'),
           {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: geminiHeaders(config.apiKey),
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }],
               generationConfig: {
