@@ -34,3 +34,6 @@ docs/superpowers/
 # investigation, not a shared harness. It kept getting swept into unrelated
 # commits. bench/locomo/run.ts and the dataset stay tracked.
 bench/locomo/diag.ts
+
+# E2E benchmark artifacts: per-conv answer/judge records and run logs
+bench/**/.results/

@@ -35,3 +35,10 @@ ENGRAM_EMBEDDING_DIMS=512 npx tsx bench/locomo/run.ts <conv 0-9> <topK=10>
   LoCoMo accuracies (e.g. upstream's ~80%): those measure an LLM answering
   from retrieved context, judged by another LLM — a laxer target than exact
   evidence-turn ranking.
+- `bench/locomo/e2e.ts` (same env, plus `LITELLM_API_KEY`) runs that
+  end-to-end protocol: answer from top-k with `gemini-flash-latest`
+  (`ENGRAM_BENCH_LLM` overrides), LLM-judged, all 1,540 non-adversarial
+  questions — mem0's question count, so roughly comparable to published
+  numbers. Per-conv results cached in `bench/locomo/.results/` (delete to
+  re-run). E2E baseline 2026-08-17, same embedder + ranking fix: **74.3%**
+  (multi-hop 44.3, temporal 80.7, open-domain 65.6, single-hop 82.9).
