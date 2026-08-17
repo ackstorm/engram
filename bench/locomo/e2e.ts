@@ -37,20 +37,26 @@ mkdirSync(resultsDir, { recursive: true });
 
 async function chat(system: string, user: string): Promise<string> {
   for (let attempt = 1; ; attempt++) {
-    const res = await fetch(CHAT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CHAT_KEY}` },
-      body: JSON.stringify({
-        model: CHAT_MODEL,
-        temperature: 0,
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      }),
-    });
-    if (res.ok) {
-      const body = await res.json();
-      return body.choices?.[0]?.message?.content?.trim() ?? '';
+    try {
+      const res = await fetch(CHAT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CHAT_KEY}` },
+        body: JSON.stringify({
+          model: CHAT_MODEL,
+          temperature: 0,
+          messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (res.ok) {
+        const body = await res.json();
+        return body.choices?.[0]?.message?.content?.trim() ?? '';
+      }
+      if (attempt >= 4) throw new Error(`chat ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    } catch (err) {
+      // hung/refused connections must retry too, not crash the run
+      if (attempt >= 4) throw err;
     }
-    if (attempt >= 4) throw new Error(`chat ${res.status}: ${(await res.text()).slice(0, 200)}`);
     await new Promise(r => setTimeout(r, attempt * 15_000));
   }
 }
