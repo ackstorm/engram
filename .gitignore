@@ -4,6 +4,10 @@ node_modules/
 *.db-wal
 *.db-shm
 *.sqlite
+# Benchmark scratch vaults. `*.db` does not catch these — the suffix is
+# .db.work, and 7MB of them reached git before this line existed.
+*.db.work*
+bench/**/.cache/
 eval-scale-data/
 eval-*.ts
 eval-*.py
