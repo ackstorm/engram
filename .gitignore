@@ -29,3 +29,8 @@ signal-quality-plan.md
 .claude/
 docs/superpowers/
 .worktrees/
+
+# Ablation scratchpad: a stack of ad-hoc score() probes rewritten per
+# investigation, not a shared harness. It kept getting swept into unrelated
+# commits. bench/locomo/run.ts and the dataset stay tracked.
+bench/locomo/diag.ts
