@@ -15,13 +15,6 @@ import { chatJson, withRetry } from './llm.js';
 // Retrieval score fusion
 // ============================================================
 
-/**
- * How large the strongest entity/topic boost may be relative to the strongest
- * primary retrieval score in the same query. mem0 uses the same idea, capping
- * its entity boost at 0.5 against a semantic score of 1.0.
- */
-const SECONDARY_SIGNAL_RATIO = 0.5;
-
 /** The largest fixed weight any secondary signal assigns (entity 0.25 + type 0.1). */
 const MAX_SECONDARY_WEIGHT = 0.35;
 
@@ -49,7 +42,7 @@ function hybridAlpha(): number {
  *
  * Cosine similarity is used raw because it carries real dynamic range — that
  * range is what lets relevance outweigh the salience/stability multiplier
- * applied later (which spans 0.64-0.89, a factor of 1.39). It is deliberately
+ * applied later (compressed to 0.92-1.28 in step 8). It is deliberately
  * NOT normalised within the query: each store normalises independently, so a
  * store holding nothing relevant would still emit a 1.0 and win the merge.
  *
@@ -796,18 +789,23 @@ If nothing: {"insights": []}`;
     }
 
     // Entity and topic matches are tie-breakers, not retrievers — the comments
-    // below have always said "boost, not flood". Their fixed weights (up to
-    // 0.35 and 0.2) only behave that way if the primary signal reaches its 0.6
-    // ceiling, and it never does: embedding models compress cosine into a
-    // narrow band (0.09-0.36 for text-embedding-3-small), so the primary lands
-    // at 0.06-0.22 and a single topic match outvotes it.
+    // below have always said "boost, not flood". A tie-breaker must be sized
+    // against the GAPS between primary scores, not their magnitude: cosine
+    // compresses into a narrow band, so adjacent candidates differ by a few
+    // percent while half-of-best-primary is ~10x that gap — boosts sized
+    // against magnitude decided the ranking instead of relevance (measured on
+    // LoCoMo conv0: hit@1 0.42 raw fusion vs 0.22 with magnitude-scaled
+    // boosts; see bench/locomo/diag.ts).
     //
-    // Scaling them against the best primary score this query produced keeps
-    // the intended ordering whatever the model's cosine range, without
-    // hard-coding a constant per embedding model.
-    const bestPrimary = fused.size > 0 ? Math.max(...fused.values()) : 0;
+    // Scale so the total secondary weight cannot exceed the spread of the
+    // top-10 primary scores: enough to reorder genuine near-ties, unable to
+    // jump a candidate over the whole band.
+    const primarySorted = [...fused.values()].sort((a, b) => b - a);
+    const bestPrimary = primarySorted[0] ?? 0;
+    const primarySpread = bestPrimary -
+      (primarySorted[Math.min(9, primarySorted.length - 1)] ?? 0);
     const secondaryScale = bestPrimary > 0
-      ? Math.min(1, (bestPrimary * SECONDARY_SIGNAL_RATIO) / MAX_SECONDARY_WEIGHT)
+      ? Math.min(1, primarySpread / MAX_SECONDARY_WEIGHT)
       : 1;
 
     // 2. Entity-based retrieval (SECONDARY — boost, not flood)
@@ -838,10 +836,11 @@ If nothing: {"insights": []}`;
       }
     }
 
-    // 4. Recent memories (light recency signal)
+    // 4. Recent memories (light recency signal — tie-break scale, like all
+    // secondaries; a flat 0.05 outweighs the gaps between primary scores)
     const recent = this.store.getRecent(5);
     for (const mem of recent) {
-      this.addCandidate(candidates, mem, 0.05);
+      this.addCandidate(candidates, mem, 0.05 * secondaryScale);
     }
 
     // 4b. Broad query fallback — if we have zero candidates so far,
@@ -964,6 +963,12 @@ If nothing: {"insights": []}`;
     // they should outrank noisy episodic results when the vector
     // similarity scores are close. Without this, basic factual queries
     // like "What is Thomas's job?" get buried under episodic noise.
+    //
+    // The multiplier is compressed around 1.0 (0.92-1.28, episodic band
+    // 0.92-1.08) so it breaks ties without overturning relevance: adjacent
+    // primary scores differ by a few percent, and the previous 0.5-1.15
+    // span let salience decide the ranking (measured on LoCoMo conv0:
+    // hit@1 0.42 raw fusion vs 0.36 with the wide multiplier).
     for (const r of results) {
       const cappedStability = Math.min(r.memory.stability, 3.0);
 
@@ -981,7 +986,7 @@ If nothing: {"insights": []}`;
       // Superseded/archived penalty: shouldn't appear in results
       const statusPenalty = (r.memory.status === 'superseded' || r.memory.status === 'archived') ? 0.5 : 0;
 
-      r.score = r.score * (0.5 + salienceBoost + stabilityBoost + typeBonus + confidenceBonus) - statusPenalty;
+      r.score = r.score * (0.9 + (salienceBoost + stabilityBoost + typeBonus + confidenceBonus) * 0.4) - statusPenalty;
 
       // Recency boost: newer memories get a small additive bump.
       // Breaks ties between competing facts about the same entity.
@@ -1106,10 +1111,15 @@ If nothing: {"insights": []}`;
         const memory = memoryMap.get(id) ?? candidates.get(id)?.memory;
         if (!memory) continue;
 
-        // Tag that this came from spreading (for debugging/eval)
-        // Use a reduced weight — spread results shouldn't dominate direct hits
+        // Spreading is for discovery: it may introduce memories direct
+        // retrieval missed, but must never re-rank direct hits. Boosting
+        // existing candidates let hub memories (shared entities in every
+        // turn) accumulate activation and outrank the actually-relevant
+        // result (measured on LoCoMo conv0: hit@1 0.22 -> 0.17 from spread).
         const spreadWeight = 0.6;
-        this.addCandidate(candidates, memory, activation * spreadWeight);
+        if (!candidates.has(id)) {
+          candidates.set(id, { memory, score: activation * spreadWeight });
+        }
         visited.add(id);
       }
 
