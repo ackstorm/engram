@@ -276,13 +276,16 @@ export interface VaultConfig {
   /** Session ID for source tracking */
   sessionId?: string;
 
-  /** LLM provider for consolidation and embeddings */
+  /**
+   * LLM and embedding credentials. One transport only: the OpenAI-compatible
+   * /v1/chat/completions and /v1/embeddings endpoints. Point `baseUrl` at a
+   * gateway to reach Gemini, Claude or anything else it proxies.
+   */
   llm?: {
-    provider: 'anthropic' | 'openai' | 'gemini';
     apiKey: string;
-    model?: string;            // Default: claude-3-5-haiku for consolidation
+    model?: string;            // No default — an unset model is a startup error
     embeddingModel?: string;   // Default: text-embedding-3-small
-    baseUrl?: string;          // Custom API base URL (for Groq, Cerebras, Ollama, etc.)
+    baseUrl?: string;          // API root (LiteLLM, vLLM, Groq, Ollama, OpenRouter…)
   };
 
   /** Temporal intelligence settings (contradiction detection, recency boost) */

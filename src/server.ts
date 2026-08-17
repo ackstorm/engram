@@ -9,7 +9,8 @@ import { createServer } from 'node:http';
 import path from 'path';
 import os from 'os';
 import { z } from 'zod';
-import { geminiEndpoint, geminiHeaders, resolveLlmModel, type MemoryScope } from './config.js';
+import { resolveLlmModel, type MemoryScope } from './config.js';
+import { chatJson } from './llm.js';
 import { resolveCorsOrigin, corsAllowlist, requireAuthToken, checkBearerToken } from './config.js';
 
 const ScopeSchema = z.enum(['project', 'global']);
@@ -67,7 +68,6 @@ function getOrCreateVault(config: VaultConfig): Vault {
     let embedder: EmbeddingProvider | undefined;
     if (config.llm) {
       embedder = createEmbedder({
-        provider: config.llm.provider === 'gemini' ? 'gemini' : 'openai',
         apiKey: config.llm.apiKey,
         model: config.llm.embeddingModel,
         baseUrl: config.llm.baseUrl,
@@ -619,14 +619,14 @@ route('POST', '/v1/shadow/compare', async (req, res, router) => {
 route('POST', '/v1/ingest/realtime', async (req, res, router) => {
   const body = await readJson(req);
   const text = body.text ?? '';
-  const geminiKey = process.env.GEMINI_API_KEY ?? process.env.ENGRAM_LLM_API_KEY;
+  const llmKey = process.env.ENGRAM_LLM_API_KEY ?? process.env.OPENAI_API_KEY;
 
   if (!text) {
     return error(res, 400, 'text is required');
   }
   const scope = requireScope(body, res);
   if (!scope) return;
-  if (!geminiKey) {
+  if (!llmKey) {
     // Fallback: store as single memory using rule-based extraction
     const { extract } = await import('./extract.js');
     const extracted = extract(text);
@@ -661,25 +661,12 @@ Respond as JSON:
 {"memories": [{"content": "...", "type": "...", "entities": ["..."], "topics": ["..."], "salience": 0.0-1.0, "status": "active|pending"}]}`;
 
   try {
-    const response = await fetch(
-      geminiEndpoint(resolveLlmModel(), 'generateContent'),
-      {
-        method: 'POST',
-        headers: geminiHeaders(geminiKey),
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },
-        }),
-      },
-    );
-
-    if (!response.ok) {
-      return error(res, 502, `LLM extraction failed: ${response.status}`);
-    }
-
-    const data = await response.json() as any;
-    const llmText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
-    const parsed = JSON.parse(llmText);
+    const llmText = await chatJson(prompt, {
+      apiKey: llmKey,
+      model: resolveLlmModel(),
+      maxTokens: 2048,
+    });
+    const parsed = JSON.parse(llmText || '{}');
 
     const created: Array<{ id: string; content: string }> = [];
     for (const mem of parsed.memories ?? []) {
@@ -864,17 +851,18 @@ Environment Variables:
   ENGRAM_DB_PATH       SQLite database path (default: engram-<owner>.db)
   ENGRAM_AUTH_TOKEN    REQUIRED. Bearer token for API authentication
   ENGRAM_CORS_ORIGIN   Comma-separated exact origins (default: none)
-  GEMINI_API_KEY       Gemini API key for embeddings & consolidation
-  ENGRAM_LLM_PROVIDER  LLM provider: gemini | openai | anthropic
-  ENGRAM_LLM_API_KEY   LLM API key (falls back to GEMINI_API_KEY for gemini)
+  OPENAI_API_KEY       API key for embeddings (OpenAI-compatible endpoint)
+  OPENAI_BASE_URL      API root for embeddings — default https://api.openai.com
+  ENGRAM_LLM_API_KEY   API key for chat calls (default: OPENAI_API_KEY)
+  ENGRAM_LLM_BASE_URL  API root for chat calls (default: OPENAI_BASE_URL's default)
   ENGRAM_LLM_MODEL     LLM model name
   ENGRAM_LLM_BASE_URL  Custom API base URL (for Groq, Cerebras, Ollama, etc.)
 
 Example:
-  ENGRAM_PORT=3800 GEMINI_API_KEY=... npx engram-serve
+  ENGRAM_PORT=3800 OPENAI_API_KEY=... ENGRAM_LLM_MODEL=gpt-4o-mini npx engram-serve
 
   # Use Groq:
-  ENGRAM_LLM_PROVIDER=openai ENGRAM_LLM_API_KEY=gsk_... ENGRAM_LLM_BASE_URL=https://api.groq.com/openai ENGRAM_LLM_MODEL=llama-3.3-70b-versatile npx engram-serve
+  ENGRAM_LLM_API_KEY=gsk_... ENGRAM_LLM_BASE_URL=https://api.groq.com ENGRAM_LLM_MODEL=llama-3.3-70b-versatile npx engram-serve
 `);
     process.exit(0);
   }
@@ -884,16 +872,15 @@ Example:
   const port = parseInt(process.env.ENGRAM_PORT ?? '0', 10);
   const host = process.env.ENGRAM_HOST ?? '127.0.0.1';
 
-  const llmProvider = process.env.ENGRAM_LLM_PROVIDER as 'anthropic' | 'openai' | 'gemini' | undefined;
-  const llmApiKey = process.env.ENGRAM_LLM_API_KEY ?? (llmProvider === 'gemini' ? process.env.GEMINI_API_KEY : undefined);
+  const llmApiKey = process.env.ENGRAM_LLM_API_KEY ?? process.env.OPENAI_API_KEY;
   const llmModel = process.env.ENGRAM_LLM_MODEL;
   const llmBaseUrl = process.env.ENGRAM_LLM_BASE_URL;
 
   const vaultConfig: VaultConfig = {
     owner,
     ...(dbPath ? { dbPath } : {}),
-    ...(llmProvider && llmApiKey ? {
-      llm: { provider: llmProvider, apiKey: llmApiKey, model: llmModel, baseUrl: llmBaseUrl },
+    ...(llmApiKey ? {
+      llm: { apiKey: llmApiKey, model: llmModel, baseUrl: llmBaseUrl },
     } : {}),
   };
 
@@ -910,7 +897,7 @@ Example:
   srv.listen().then(async () => {
     console.log(`Vault owner: ${owner}`);
     console.log(`Database: ${dbPath ?? path.join(os.homedir(), '.engram', `${owner}.db`)}`);
-    if (llmProvider) console.log(`LLM: ${llmProvider} (${llmModel ?? 'default'})`);
+    if (llmApiKey) console.log(`LLM: OpenAI-compatible (${llmModel ?? 'model unset'})`);
     console.log('\nEndpoints:');
     console.log('  POST   /v1/memories          — Store a memory');
     console.log('  GET    /v1/memories/recall    — Recall memories');

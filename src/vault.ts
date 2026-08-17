@@ -7,44 +7,9 @@ import type { EmbeddingProvider } from './embeddings.js';
 import { extract } from './extract.js';
 import { calculateRecencyBoost, DEFAULT_TEMPORAL_CONFIG, findContradictionCandidates, verifyContradiction, temporalEdgeWeight } from './temporal.js';
 import type { TemporalConfig } from './temporal.js';
-import { geminiEndpoint, geminiHeaders, resolveLlmModel } from './config.js';
+import { resolveLlmModel } from './config.js';
+import { chatJson, withRetry } from './llm.js';
 
-// ============================================================
-// Retry helper for rate-limited API calls
-// ============================================================
-
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  { maxRetries = 3, label = 'API call' }: { maxRetries?: number; label?: string } = {},
-): Promise<T> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      const msg = err?.message ?? String(err);
-      const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('rate');
-      if (is429 && attempt < maxRetries) {
-        // Try to parse retry delay from error message
-        const retryMatch = msg.match(/retry in ([\d.]+)s/i);
-        const waitSec = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) + 1 : (attempt + 1) * 15;
-        console.error(`[engram] ${label} rate limited. Retrying in ${waitSec}s (attempt ${attempt + 1}/${maxRetries})...`);
-        await new Promise(r => setTimeout(r, waitSec * 1000));
-        continue;
-      }
-      // Friendlier error message for rate limits
-      if (is429) {
-        throw new Error(
-          `[engram] Rate limited after ${maxRetries} retries. ` +
-          `Free Gemini tier allows ~20 requests/minute. ` +
-          `Either wait a moment and retry, or upgrade to a paid API key. ` +
-          `Details: ${msg}`,
-        );
-      }
-      throw err;
-    }
-  }
-  throw new Error('unreachable');
-}
 
 // ============================================================
 // Retrieval score fusion
@@ -2058,7 +2023,7 @@ Respond as JSON:
     // Step 1: Extract structured memories from the summary via LLM
     //
     // Key: we ask for a JSON ARRAY (not an object with a "memories" key)
-    // because Gemini's structured output is more reliable with top-level arrays.
+    // because structured output is more reliable with top-level arrays.
     // We also emphasize MULTIPLE separate memories to prevent single-blob responses.
     const extractPrompt = `Extract ${maxMemories} separate memories from this session context. Each memory is ONE fact, decision, or event.
 
@@ -2744,91 +2709,7 @@ Be conservative with explicit memories. Be observant with implicit ones — look
   // --------------------------------------------------------
 
   private async callLLM(model: string, prompt: string, config: NonNullable<VaultConfig['llm']>): Promise<string> {
-    if (config.provider === 'anthropic') {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': config.apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 4096,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Anthropic API error: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json() as { content: Array<{ type: string; text: string }> };
-      const text = data.content?.find(c => c.type === 'text')?.text ?? '';
-
-      // Extract JSON from response (handle markdown code blocks)
-      const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) ?? text.match(/\{[\s\S]*\}/);
-      return jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : text;
-    }
-
-    if (config.provider === 'gemini') {
-      return withRetry(async () => {
-        const response = await fetch(
-          geminiEndpoint(model, 'generateContent'),
-          {
-            method: 'POST',
-            headers: geminiHeaders(config.apiKey),
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: {
-                responseMimeType: 'application/json',
-                maxOutputTokens: 4096,
-              },
-            }),
-          },
-        );
-
-        if (!response.ok) {
-          const err = await response.text();
-          throw new Error(`Gemini API error: ${response.status} ${err}`);
-        }
-
-        const data = await response.json() as {
-          candidates: Array<{ content: { parts: Array<{ text: string }> } }>;
-        };
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-        const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) ?? text.match(/\{[\s\S]*\}/);
-        return jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : text;
-      }, { label: 'Gemini generateContent' });
-    }
-
-    if (config.provider === 'openai') {
-      const baseUrl = config.baseUrl ?? 'https://api.openai.com';
-      return withRetry(async () => {
-        const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages: [{ role: 'user', content: prompt }],
-            response_format: { type: 'json_object' },
-          }),
-        });
-
-        if (!response.ok) {
-          const err = await response.text();
-          throw new Error(`OpenAI-compatible API error: ${response.status} ${err}`);
-        }
-
-        const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-        return data.choices[0]?.message?.content ?? '';
-      }, { label: `OpenAI-compatible (${baseUrl})` });
-    }
-
-    throw new Error(`Unsupported LLM provider: ${config.provider}`);
+    return chatJson(prompt, { apiKey: config.apiKey, model, baseUrl: config.baseUrl });
   }
 
   // --------------------------------------------------------

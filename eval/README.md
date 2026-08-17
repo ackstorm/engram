@@ -5,7 +5,6 @@ than argued from anecdotes. Two rounds of tuning went wrong before this existed,
 both times by generalising from a four-memory vault.
 
 ```bash
-MODEL_PROVIDER=openai \
 OPENAI_API_KEY=$KEY OPENAI_BASE_URL=https://your-gateway \
 ENGRAM_EMBEDDING_MODEL=text-embedding-3-small \
   npm run eval:retrieval          # add --verbose for every case, --keyword-only for the lexical path

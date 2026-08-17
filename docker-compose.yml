@@ -23,17 +23,16 @@ services:
       # OPENAI_BASE_URL must be the API ROOT, not the versioned path — Engram
       # appends /v1/embeddings itself. "https://host/v1" yields /v1/v1/... and
       # 404s. Most other tools want the /v1 form, so this one differs.
-      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env — embeddings are required}
       ENGRAM_EMBEDDING_MODEL: ${ENGRAM_EMBEDDING_MODEL:-text-embedding-3-small}
       # Leave ENGRAM_EMBEDDING_DIMS unset unless your model is non-standard.
-      # text-embedding-3-small is 1536, which is already the default for this
-      # provider — and setting it explicitly makes Engram send a `dimensions`
-      # parameter that some OpenAI-compatible gateways reject.
+      # text-embedding-3-small is 1536, which is already the default — and
+      # setting it explicitly makes Engram send a `dimensions` parameter that
+      # some OpenAI-compatible gateways reject.
       #
       # The dimension is baked into the vault schema on first write. Changing
-      # the model or provider later is rejected at startup: see
+      # the model later is rejected at startup: see
       # docs/references/embedding-config-is-immutable.md
       ENGRAM_EMBEDDING_DIMS: ${ENGRAM_EMBEDDING_DIMS:-}
 
@@ -41,19 +40,13 @@ services:
       # There is deliberately no built-in default model — an unset model is a
       # startup error rather than a guess. Set it in .env.
       #
-      # The OpenAI-compatible route reaches every model a LiteLLM-style gateway
-      # exposes, including proxied Gemini ones, so a single provider and base
-      # URL normally covers both embeddings and chat. Use ENGRAM_LLM_PROVIDER=
-      # gemini only for Google's native endpoint.
-      ENGRAM_LLM_PROVIDER: ${ENGRAM_LLM_PROVIDER:-openai}
+      # The OpenAI-compatible route is the only transport. It reaches every
+      # model a LiteLLM-style gateway exposes — Gemini and Claude included — so
+      # one base URL covers both embeddings and chat.
       ENGRAM_LLM_MODEL: ${ENGRAM_LLM_MODEL:?set ENGRAM_LLM_MODEL in .env — there is no default}
       ENGRAM_LLM_API_KEY: ${ENGRAM_LLM_API_KEY:?set ENGRAM_LLM_API_KEY in .env}
       # Root URL for the chat route. Leave unset for api.openai.com.
       ENGRAM_LLM_BASE_URL: ${ENGRAM_LLM_BASE_URL:-}
-
-      # Only used when ENGRAM_LLM_PROVIDER=gemini.
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GOOGLE_GEMINI_BASE_URL: ${GOOGLE_GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}
 
       # --- Access ---------------------------------------------
       ENGRAM_CORS_ORIGIN: ${ENGRAM_CORS_ORIGIN:-}

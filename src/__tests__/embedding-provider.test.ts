@@ -1,10 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import {
-  resolveModelProvider,
+  assertSupportedProvider,
   openaiBaseUrl,
   resolveEmbeddingModel,
-  resolveEmbeddingDims,
   resolveEmbeddingDims,
 } from '../config.js';
 import { createEmbedder, OpenAIEmbeddings } from '../embeddings.js';
@@ -16,7 +15,6 @@ const ENV_KEYS = [
   'GEMINI_API_KEY',
   'ENGRAM_EMBEDDING_MODEL',
   'ENGRAM_EMBEDDING_DIMS',
-  'GOOGLE_GEMINI_BASE_URL',
 ] as const;
 
 let saved: Record<string, string | undefined>;
@@ -36,44 +34,32 @@ afterEach(() => {
   }
 });
 
-describe('resolveModelProvider', () => {
-  it('honours MODEL_PROVIDER=openai', () => {
+// MODEL_PROVIDER survives only as a rejection: installs carrying
+// MODEL_PROVIDER=gemini also carry a Gemini key and model name, and sending
+// those to an OpenAI-compatible endpoint fails far from the cause.
+describe('assertSupportedProvider', () => {
+  it('accepts MODEL_PROVIDER=openai', () => {
     process.env.MODEL_PROVIDER = 'openai';
-    expect(resolveModelProvider()).toBe('openai');
+    expect(() => assertSupportedProvider()).not.toThrow();
   });
 
-  it('honours MODEL_PROVIDER=gemini', () => {
+  it('accepts an unset MODEL_PROVIDER', () => {
+    expect(() => assertSupportedProvider()).not.toThrow();
+  });
+
+  it('rejects a leftover MODEL_PROVIDER=gemini with an actionable message', () => {
     process.env.MODEL_PROVIDER = 'gemini';
-    expect(resolveModelProvider()).toBe('gemini');
+    expect(() => assertSupportedProvider()).toThrow(/gemini/);
+    expect(() => assertSupportedProvider()).toThrow(/OPENAI_BASE_URL/);
+  });
+
+  it('rejects any other provider name', () => {
+    process.env.MODEL_PROVIDER = 'cohere';
+    expect(() => assertSupportedProvider()).toThrow(/cohere/);
   });
 
   it('is case and whitespace insensitive', () => {
-    process.env.MODEL_PROVIDER = '  GEMINI ';
-    expect(resolveModelProvider()).toBe('gemini');
-  });
-
-  it('rejects an unknown provider by name', () => {
-    process.env.MODEL_PROVIDER = 'cohere';
-    expect(() => resolveModelProvider()).toThrow(/cohere/);
-  });
-
-  it('prefers an explicit argument over the env var', () => {
-    process.env.MODEL_PROVIDER = 'gemini';
-    expect(resolveModelProvider('openai')).toBe('openai');
-  });
-
-  it('infers gemini from GEMINI_API_KEY when unset (back-compat)', () => {
-    process.env.GEMINI_API_KEY = 'k';
-    expect(resolveModelProvider()).toBe('gemini');
-  });
-
-  it('infers openai from OPENAI_API_KEY when unset (back-compat)', () => {
-    process.env.OPENAI_API_KEY = 'k';
-    expect(resolveModelProvider()).toBe('openai');
-  });
-
-  it('throws when nothing is configured at all', () => {
-    expect(() => resolveModelProvider()).toThrow(/MODEL_PROVIDER/);
+    expect(() => assertSupportedProvider('  OPENAI ')).not.toThrow();
   });
 });
 
@@ -88,31 +74,25 @@ describe('openaiBaseUrl', () => {
   });
 });
 
-describe('provider-aware embedding defaults', () => {
-  it('defaults gemini to gemini-embedding-001 / 3072', () => {
-    expect(resolveEmbeddingModel('gemini')).toBe('gemini-embedding-001');
-    expect(resolveEmbeddingDims('gemini')).toBe(3072);
+describe('embedding defaults', () => {
+  it('defaults to text-embedding-3-small / 1536', () => {
+    expect(resolveEmbeddingModel()).toBe('text-embedding-3-small');
+    expect(resolveEmbeddingDims()).toBe(1536);
   });
 
-  it('defaults openai to text-embedding-3-small / 1536', () => {
-    expect(resolveEmbeddingModel('openai')).toBe('text-embedding-3-small');
-    expect(resolveEmbeddingDims('openai')).toBe(1536);
-  });
-
-  it('honours ENGRAM_EMBEDDING_MODEL for either provider', () => {
+  it('honours ENGRAM_EMBEDDING_MODEL', () => {
     process.env.ENGRAM_EMBEDDING_MODEL = 'bge-m3';
-    expect(resolveEmbeddingModel('openai')).toBe('bge-m3');
-    expect(resolveEmbeddingModel('gemini')).toBe('bge-m3');
+    expect(resolveEmbeddingModel()).toBe('bge-m3');
   });
 
   it('honours ENGRAM_EMBEDDING_DIMS', () => {
     process.env.ENGRAM_EMBEDDING_DIMS = '1024';
-    expect(resolveEmbeddingDims('openai')).toBe(1024);
+    expect(resolveEmbeddingDims()).toBe(1024);
   });
 
   it('rejects a non-numeric ENGRAM_EMBEDDING_DIMS', () => {
     process.env.ENGRAM_EMBEDDING_DIMS = 'lots';
-    expect(() => resolveEmbeddingDims('openai')).toThrow(/ENGRAM_EMBEDDING_DIMS/);
+    expect(() => resolveEmbeddingDims()).toThrow(/ENGRAM_EMBEDDING_DIMS/);
   });
 });
 
@@ -176,53 +156,52 @@ describe('OpenAI-compatible embeddings', () => {
 });
 
 describe('createEmbedder', () => {
-  it('builds an OpenAI embedder when MODEL_PROVIDER=openai', () => {
-    process.env.MODEL_PROVIDER = 'openai';
+  it('builds an embedder from OPENAI_API_KEY', () => {
     process.env.OPENAI_API_KEY = 'sk-test';
     const embedder = createEmbedder();
     expect(embedder).toBeDefined();
     expect(embedder!.dimensions()).toBe(1536);
   });
 
-  it('builds a Gemini embedder when MODEL_PROVIDER=gemini', () => {
-    process.env.MODEL_PROVIDER = 'gemini';
+  it('returns undefined when no key is configured', () => {
+    expect(createEmbedder()).toBeUndefined();
+  });
+
+  // A GEMINI_API_KEY alone must not silently produce a working embedder — the
+  // key would be sent to an OpenAI-compatible endpoint that will reject it.
+  it('ignores a stray GEMINI_API_KEY', () => {
     process.env.GEMINI_API_KEY = 'g-test';
-    const embedder = createEmbedder();
-    expect(embedder).toBeDefined();
-    expect(embedder!.dimensions()).toBe(3072);
-  });
-
-  it('returns undefined when the selected provider has no key', () => {
-    process.env.MODEL_PROVIDER = 'openai';
     expect(createEmbedder()).toBeUndefined();
   });
 
-  it('returns undefined when nothing is configured', () => {
-    expect(createEmbedder()).toBeUndefined();
+  it('refuses to build when MODEL_PROVIDER still says gemini', () => {
+    process.env.MODEL_PROVIDER = 'gemini';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    expect(() => createEmbedder()).toThrow(/no longer supported/);
   });
 });
 
 describe('model-aware dimensions', () => {
   it('derives 3072 for text-embedding-3-large', () => {
-    expect(resolveEmbeddingDims('openai', undefined, 'text-embedding-3-large')).toBe(3072);
+    expect(resolveEmbeddingDims(undefined, 'text-embedding-3-large')).toBe(3072);
   });
 
   it('derives 1536 for text-embedding-3-small', () => {
-    expect(resolveEmbeddingDims('openai', undefined, 'text-embedding-3-small')).toBe(1536);
+    expect(resolveEmbeddingDims(undefined, 'text-embedding-3-small')).toBe(1536);
   });
 
   it('matches gateway-namespaced model names', () => {
     // LiteLLM-style prefixes must resolve the same as the bare name, or the
     // vector table is built at the provider default and every write fails.
-    expect(resolveEmbeddingDims('openai', undefined, 'openai.text-embedding-3-large')).toBe(3072);
+    expect(resolveEmbeddingDims(undefined, 'openai.text-embedding-3-large')).toBe(3072);
   });
 
-  it('falls back to the provider default for an unknown model', () => {
-    expect(resolveEmbeddingDims('openai', undefined, 'some-local-bge-model')).toBe(1536);
+  it('falls back to the generic default for an unknown model', () => {
+    expect(resolveEmbeddingDims(undefined, 'some-local-bge-model')).toBe(1536);
   });
 
   it('lets ENGRAM_EMBEDDING_DIMS override a known model, for MRL', () => {
     process.env.ENGRAM_EMBEDDING_DIMS = '512';
-    expect(resolveEmbeddingDims('openai', undefined, 'text-embedding-3-large')).toBe(512);
+    expect(resolveEmbeddingDims(undefined, 'text-embedding-3-large')).toBe(512);
   });
 });

@@ -1,8 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  geminiBaseUrl,
-  geminiEndpoint,
-  geminiHeaders,
   resolveLlmModel,
   resolveEmbeddingModel,
   corsAllowlist,
@@ -12,7 +9,6 @@ import {
 } from '../config.js';
 
 const ENV_KEYS = [
-  'GOOGLE_GEMINI_BASE_URL',
   'ENGRAM_LLM_MODEL',
   'ENGRAM_EMBEDDING_MODEL',
   'ENGRAM_CORS_ORIGIN',
@@ -34,57 +30,6 @@ afterEach(() => {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k]!;
   }
-});
-
-describe('geminiBaseUrl', () => {
-  it('defaults to the public Google endpoint', () => {
-    expect(geminiBaseUrl()).toBe('https://generativelanguage.googleapis.com');
-  });
-
-  it('honours GOOGLE_GEMINI_BASE_URL', () => {
-    process.env.GOOGLE_GEMINI_BASE_URL = 'https://gemini.internal.ackstorm.com';
-    expect(geminiBaseUrl()).toBe('https://gemini.internal.ackstorm.com');
-  });
-
-  it('strips trailing slashes so URL joining stays correct', () => {
-    process.env.GOOGLE_GEMINI_BASE_URL = 'https://proxy.example.com/';
-    expect(geminiBaseUrl()).toBe('https://proxy.example.com');
-  });
-
-  it('ignores a blank value', () => {
-    process.env.GOOGLE_GEMINI_BASE_URL = '   ';
-    expect(geminiBaseUrl()).toBe('https://generativelanguage.googleapis.com');
-  });
-});
-
-describe('geminiEndpoint', () => {
-  it('builds a generateContent URL against the default host', () => {
-    expect(geminiEndpoint('gemini-flash-latest', 'generateContent')).toBe(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
-    );
-  });
-
-  it('builds against an overridden host', () => {
-    process.env.GOOGLE_GEMINI_BASE_URL = 'https://proxy.example.com';
-    expect(geminiEndpoint('any-model', 'embedContent')).toBe(
-      'https://proxy.example.com/v1beta/models/any-model:embedContent',
-    );
-  });
-
-  // Request URLs are logged in full by proxies and gateways, so the key must
-  // never reach the query string.
-  it('keeps the api key out of the URL', () => {
-    expect(geminiEndpoint('m', 'generateContent')).not.toContain('key=');
-  });
-});
-
-describe('geminiHeaders', () => {
-  it('carries the api key in the x-goog-api-key header', () => {
-    expect(geminiHeaders('k1')).toEqual({
-      'Content-Type': 'application/json',
-      'x-goog-api-key': 'k1',
-    });
-  });
 });
 
 describe('resolveLlmModel', () => {
@@ -112,17 +57,17 @@ describe('resolveLlmModel', () => {
 });
 
 describe('resolveEmbeddingModel', () => {
-  it('keeps a per-provider default because the dimension is baked into the schema', () => {
-    expect(resolveEmbeddingModel('gemini')).toBe('gemini-embedding-001');
+  it('keeps a default because the dimension is baked into the schema', () => {
+    expect(resolveEmbeddingModel()).toBe('text-embedding-3-small');
   });
 
   it('honours ENGRAM_EMBEDDING_MODEL', () => {
-    process.env.ENGRAM_EMBEDDING_MODEL = 'gemini-embedding-002';
-    expect(resolveEmbeddingModel('gemini')).toBe('gemini-embedding-002');
+    process.env.ENGRAM_EMBEDDING_MODEL = 'bge-m3';
+    expect(resolveEmbeddingModel()).toBe('bge-m3');
   });
 
   it('prefers an explicit argument', () => {
-    expect(resolveEmbeddingModel('gemini', 'explicit')).toBe('explicit');
+    expect(resolveEmbeddingModel('explicit')).toBe('explicit');
   });
 });
 

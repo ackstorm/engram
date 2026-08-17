@@ -11,21 +11,26 @@ Every runtime knob is an environment variable. Nothing is read from a config fil
 
 ## LLM and embeddings
 
+Engram speaks one protocol: the OpenAI-compatible `/v1/embeddings` and
+`/v1/chat/completions` endpoints. Native Gemini and Anthropic clients were
+removed. To use a Gemini or Claude model, point the base URL at a gateway that
+proxies it (LiteLLM, vLLM, OpenRouter, Vertex AI's compatibility layer) — the
+model name is then whatever that gateway calls it.
+
 | Variable | Default | Notes |
 |---|---|---|
-| `ENGRAM_LLM_PROVIDER` | — | `gemini`, `openai`, or `anthropic`. |
-| `ENGRAM_LLM_API_KEY` | falls back to `GEMINI_API_KEY` | |
-| `ENGRAM_LLM_BASE_URL` | provider default | OpenAI-compatible endpoints (Groq, Cerebras, Ollama). |
-| `GOOGLE_GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com` | Reroutes **all** Gemini traffic — LLM calls and embeddings alike. Trailing slashes are stripped. |
-| `MODEL_PROVIDER` | inferred from whichever API key is set | `openai` or `gemini`. Selects the **embedding** provider only; the LLM provider is `ENGRAM_LLM_PROVIDER`. |
-| `OPENAI_BASE_URL` | `https://api.openai.com` | Any OpenAI-compatible embeddings endpoint. |
-| `ENGRAM_EMBEDDING_MODEL` | `gemini-embedding-001` / `text-embedding-3-small` | Per-provider default. |
-| `ENGRAM_EMBEDDING_DIMS` | `3072` / `1536` | Per-provider default. Sent as the OpenAI `dimensions` parameter only when explicitly set. |
+| `OPENAI_API_KEY` | — | Key for embeddings. Also the fallback key for chat. |
+| `OPENAI_BASE_URL` | `https://api.openai.com` | API **root**, not the versioned path — Engram appends `/v1/embeddings` itself, so `https://host/v1` produces `/v1/v1/embeddings` and 404s. |
+| `ENGRAM_LLM_API_KEY` | `OPENAI_API_KEY` | Separate key for chat, when the two live behind different credentials. |
+| `ENGRAM_LLM_BASE_URL` | `https://api.openai.com` | API root for chat. |
+| `ENGRAM_EMBEDDING_MODEL` | `text-embedding-3-small` | |
+| `ENGRAM_EMBEDDING_DIMS` | the model's native width | Falls back to `1536` for an unrecognised model. Sent as the OpenAI `dimensions` parameter only when explicitly set — some gateways reject it. |
+| `ENGRAM_ALLOW_NO_EMBEDDER` | unset | `1` permits starting with no embedding key. Recall then runs keyword-only, which measures roughly half the accuracy. |
+| `MODEL_PROVIDER` | unset | Accepted only as `openai`. Any other value is a startup error, so a leftover `MODEL_PROVIDER=gemini` fails loudly rather than sending a Gemini key to an OpenAI endpoint. |
 
-Changing the embedding model, dimension, or `MODEL_PROVIDER` on an existing
-vault is rejected at startup: the dimension is recorded in `engram_meta` and
-every stored vector depends on it. Point `ENGRAM_DB_PATH` at a new file and
-re-import instead.
+Changing the embedding model or dimension on an existing vault is rejected at
+startup: the dimension is recorded in `engram_meta` and every stored vector
+depends on it. Point `ENGRAM_DB_PATH` at a new file and re-import instead.
 
 ## Network
 

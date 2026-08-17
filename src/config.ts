@@ -10,31 +10,6 @@ import { join, basename, dirname, resolve } from 'path';
 import { homedir } from 'os';
 import type { VaultConfig } from './types.js';
 
-const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
-
-/** Base URL for the Google Gemini API. Override with GOOGLE_GEMINI_BASE_URL. */
-export function geminiBaseUrl(): string {
-  const raw = process.env.GOOGLE_GEMINI_BASE_URL?.trim();
-  return (raw || DEFAULT_GEMINI_BASE_URL).replace(/\/+$/, '');
-}
-
-/**
- * Build a Gemini REST endpoint, e.g. geminiEndpoint(model, 'generateContent').
- *
- * The API key is deliberately NOT in the query string. Request URLs are logged
- * in full by proxies, gateways and CDNs, so `?key=` writes the credential into
- * every access log between here and Google. Pass it via geminiHeaders instead —
- * which is what Google's own SDK does.
- */
-export function geminiEndpoint(model: string, method: string): string {
-  return `${geminiBaseUrl()}/v1beta/models/${model}:${method}`;
-}
-
-/** Headers for a Gemini REST call, carrying the API key out of the URL. */
-export function geminiHeaders(apiKey: string): Record<string, string> {
-  return { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey };
-}
-
 /**
  * Resolve the LLM model. There is deliberately NO built-in default (issue #6):
  * an unset model is a configuration error, not something to guess at. Guessing
@@ -45,72 +20,57 @@ export function resolveLlmModel(configured?: string): string {
   if (!model) {
     throw new Error(
       '[engram] No LLM model configured. Set ENGRAM_LLM_MODEL ' +
-      '(e.g. ENGRAM_LLM_MODEL=gemini-flash-latest) or pass llm.model in VaultConfig.',
+      '(e.g. ENGRAM_LLM_MODEL=gpt-4o-mini) or pass llm.model in VaultConfig.',
     );
   }
   return model;
 }
 
 // ============================================================
-// Embedding provider selection
+// Embeddings
 // ============================================================
-
-/** The env var that selects the embedding provider. Rename here only. */
-const MODEL_PROVIDER_ENV = 'MODEL_PROVIDER';
+//
+// One transport: the OpenAI-compatible /v1/embeddings and /v1/chat/completions
+// endpoints. Native Gemini and Anthropic clients were removed — every gateway
+// worth pointing at (LiteLLM, vLLM, Groq, Ollama, OpenRouter, Vertex's
+// compatibility layer) speaks this shape, including for Gemini and Claude
+// models, so the second and third clients bought nothing but branches.
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com';
+const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
+const DEFAULT_EMBEDDING_DIMS = 1536;
 
-export type ModelProvider = 'openai' | 'gemini';
-
-const EMBEDDING_DEFAULTS: Record<ModelProvider, { model: string; dims: number }> = {
-  gemini: { model: 'gemini-embedding-001', dims: 3072 },
-  openai: { model: 'text-embedding-3-small', dims: 1536 },
-};
+/** The env var that used to select between providers. Kept only to reject it. */
+const MODEL_PROVIDER_ENV = 'MODEL_PROVIDER';
 
 /**
- * Which provider serves embeddings. Explicit argument wins, then
- * MODEL_PROVIDER, then whichever API key is present (back-compat with
- * installs that predate this variable).
- *
- * This selects the EMBEDDING provider only. The LLM provider is
- * ENGRAM_LLM_PROVIDER and is resolved separately.
+ * Reject a leftover MODEL_PROVIDER=gemini rather than ignoring it. An install
+ * carrying that value has a Gemini key and a Gemini model name; silently
+ * sending both to an OpenAI-compatible endpoint fails somewhere far less
+ * obvious than startup.
  */
-export function resolveModelProvider(configured?: string): ModelProvider {
+export function assertSupportedProvider(configured?: string): void {
   const raw = (configured ?? process.env[MODEL_PROVIDER_ENV] ?? '').trim().toLowerCase();
-  if (raw === 'openai' || raw === 'gemini') return raw;
-  if (raw) {
+  if (raw && raw !== 'openai') {
     throw new Error(
-      `[engram] ${MODEL_PROVIDER_ENV} must be 'openai' or 'gemini', got '${raw}'.`,
+      `[engram] ${MODEL_PROVIDER_ENV}='${raw}' is no longer supported — only the ` +
+      "OpenAI-compatible route remains. Point OPENAI_BASE_URL at a gateway that " +
+      'proxies the model you want (LiteLLM, vLLM, OpenRouter, Vertex AI) and set ' +
+      `${MODEL_PROVIDER_ENV}=openai.`,
     );
   }
-  if (process.env.GEMINI_API_KEY?.trim()) return 'gemini';
-  if (process.env.OPENAI_API_KEY?.trim()) return 'openai';
-  throw new Error(
-    `[engram] No embedding provider configured. Set ${MODEL_PROVIDER_ENV}=openai|gemini ` +
-    'together with the matching OPENAI_API_KEY or GEMINI_API_KEY.',
-  );
 }
 
 /**
  * LLM config for consolidation, ask(), checkpoint() and audit() — separate
- * from the embedding provider above. Shared by MemoryRouter.open() and the
- * MCP server so both build the same {provider, apiKey, baseUrl} shape from
- * the same env vars.
+ * from the embedding config above. Shared by MemoryRouter.open() and the MCP
+ * server so both build the same {apiKey, baseUrl} shape from the same env vars.
  */
 export function resolveLlmConfig(): VaultConfig['llm'] | undefined {
-  const geminiKey = process.env.GEMINI_API_KEY;
-  const openaiKey = process.env.OPENAI_API_KEY;
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const provider = process.env.ENGRAM_LLM_PROVIDER ??
-    (geminiKey ? 'gemini' : openaiKey ? 'openai' : anthropicKey ? 'anthropic' : undefined);
-  const apiKey = process.env.ENGRAM_LLM_API_KEY ?? geminiKey ?? openaiKey ?? anthropicKey;
-  if (!provider || !apiKey) return undefined;
+  const apiKey = process.env.ENGRAM_LLM_API_KEY ?? process.env.OPENAI_API_KEY;
+  if (!apiKey) return undefined;
   const baseUrl = process.env.ENGRAM_LLM_BASE_URL;
-  return {
-    provider: provider as 'gemini' | 'openai' | 'anthropic',
-    apiKey,
-    ...(baseUrl ? { baseUrl } : {}),
-  };
+  return { apiKey, ...(baseUrl ? { baseUrl } : {}) };
 }
 
 /** Base URL for OpenAI-compatible embedding endpoints (Groq, vLLM, LiteLLM, Ollama…). */
@@ -120,25 +80,28 @@ export function openaiBaseUrl(): string {
 }
 
 /**
- * Embedding model. Unlike the LLM model this keeps per-provider defaults:
- * the vector dimension is part of the SQLite schema, so the model is not a
- * free choice once a vault exists.
+ * Embedding model. Unlike the LLM model this keeps a default: the vector
+ * dimension is part of the SQLite schema, so the model is not a free choice
+ * once a vault exists.
  */
-export function resolveEmbeddingModel(provider: ModelProvider, configured?: string): string {
+export function resolveEmbeddingModel(configured?: string): string {
   return (
     configured?.trim() ||
     process.env.ENGRAM_EMBEDDING_MODEL?.trim() ||
-    EMBEDDING_DEFAULTS[provider].model
+    DEFAULT_EMBEDDING_MODEL
   );
 }
 
 /**
  * Native output width of models we know, matched on suffix so gateway
  * namespacing ("openai.text-embedding-3-large") resolves the same as the bare
- * name. Without this a provider-level default is used, and switching from
- * -small to -large builds the vector table at 1536 while the API returns 3072
- * — every write then fails with a bare SQL error, and because embedding is
+ * name. Without this the generic default is used, and switching from -small to
+ * -large builds the vector table at 1536 while the API returns 3072 — every
+ * write then fails with a bare SQL error, and because embedding is
  * fire-and-forget the vault silently ends up with no vectors at all.
+ *
+ * The Gemini models stay listed: a gateway can serve them over the
+ * OpenAI-compatible /v1/embeddings route, which is the only route left.
  */
 const KNOWN_MODEL_DIMS: Array<[string, number]> = [
   ['text-embedding-3-small', 1536],
@@ -157,19 +120,15 @@ export function knownModelDims(model: string): number | undefined {
 /**
  * Embedding dimension. Resolution order: explicit argument, then
  * ENGRAM_EMBEDDING_DIMS, then the model's known native width, then the
- * provider default. Set ENGRAM_EMBEDDING_DIMS only for a model we do not
+ * generic default. Set ENGRAM_EMBEDDING_DIMS only for a model we do not
  * recognise, or to request a shortened MRL vector.
  */
-export function resolveEmbeddingDims(
-  provider: ModelProvider,
-  configured?: number,
-  model?: string,
-): number {
+export function resolveEmbeddingDims(configured?: number, model?: string): number {
   if (configured !== undefined) return configured;
   const raw = process.env.ENGRAM_EMBEDDING_DIMS?.trim();
   if (!raw) {
     const known = model ? knownModelDims(model) : undefined;
-    return known ?? EMBEDDING_DEFAULTS[provider].dims;
+    return known ?? DEFAULT_EMBEDDING_DIMS;
   }
   const dims = Number(raw);
   if (!Number.isInteger(dims) || dims <= 0) {

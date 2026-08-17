@@ -2,50 +2,14 @@
 // Embedding Provider — Pluggable embedding generation
 // ============================================================
 
+import { withRetry } from './llm.js';
 import {
-  geminiEndpoint,
-  geminiHeaders,
+  assertSupportedProvider,
   resolveEmbeddingModel,
   resolveEmbeddingDims,
-  resolveModelProvider,
   openaiBaseUrl,
-  type ModelProvider,
 } from './config.js';
 
-// ============================================================
-// Retry helper for rate-limited API calls
-// ============================================================
-
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  { maxRetries = 3, label = 'API call' }: { maxRetries?: number; label?: string } = {},
-): Promise<T> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      const msg = err?.message ?? String(err);
-      const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('rate');
-      if (is429 && attempt < maxRetries) {
-        const retryMatch = msg.match(/retry in ([\d.]+)s/i);
-        const waitSec = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) + 1 : (attempt + 1) * 15;
-        console.error(`[engram] ${label} rate limited. Retrying in ${waitSec}s (attempt ${attempt + 1}/${maxRetries})...`);
-        await new Promise(r => setTimeout(r, waitSec * 1000));
-        continue;
-      }
-      if (is429) {
-        throw new Error(
-          `[engram] Rate limited after ${maxRetries} retries. ` +
-          `Free Gemini tier allows ~20 requests/minute. ` +
-          `Either wait a moment and retry, or upgrade to a paid API key. ` +
-          `Details: ${msg}`,
-        );
-      }
-      throw err;
-    }
-  }
-  throw new Error('unreachable');
-}
 
 export interface EmbeddingProvider {
   /** Generate an embedding vector for the given text */
@@ -70,9 +34,9 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
 
   constructor(apiKey: string, model?: string, dims?: number, baseUrl?: string) {
     this.apiKey = apiKey;
-    this.model = resolveEmbeddingModel('openai', model);
+    this.model = resolveEmbeddingModel(model);
     this.explicitDims = dims !== undefined || !!process.env.ENGRAM_EMBEDDING_DIMS?.trim();
-    this.dims = resolveEmbeddingDims('openai', dims, this.model);
+    this.dims = resolveEmbeddingDims(dims, this.model);
     this.baseUrl = baseUrl?.replace(/\/+$/, '') ?? openaiBaseUrl();
   }
 
@@ -119,75 +83,6 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
   }
 }
 
-// ============================================================
-// Gemini Embeddings (free tier available)
-// ============================================================
-
-export class GeminiEmbeddings implements EmbeddingProvider {
-  private apiKey: string;
-  private model: string;
-  private dims: number;
-
-  constructor(apiKey: string, model?: string, dims?: number) {
-    this.apiKey = apiKey;
-    this.model = resolveEmbeddingModel('gemini', model);
-    this.dims = resolveEmbeddingDims('gemini', dims, this.model);
-  }
-
-  async embed(text: string): Promise<number[]> {
-    return withRetry(async () => {
-      const response = await fetch(
-        geminiEndpoint(this.model, 'embedContent'),
-        {
-          method: 'POST',
-          headers: geminiHeaders(this.apiKey),
-          body: JSON.stringify({
-            model: `models/${this.model}`,
-            content: { parts: [{ text }] },
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        const err = await response.text();
-        throw new Error(`Gemini Embeddings API error: ${response.status} ${err}`);
-      }
-
-      const data = await response.json() as { embedding: { values: number[] } };
-      return data.embedding.values;
-    }, { label: 'Gemini embedContent' });
-  }
-
-  async embedBatch(texts: string[]): Promise<number[][]> {
-    return withRetry(async () => {
-      const response = await fetch(
-        geminiEndpoint(this.model, 'batchEmbedContents'),
-        {
-          method: 'POST',
-          headers: geminiHeaders(this.apiKey),
-          body: JSON.stringify({
-            requests: texts.map(text => ({
-              model: `models/${this.model}`,
-              content: { parts: [{ text }] },
-          })),
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        const err = await response.text();
-        throw new Error(`Gemini Batch Embeddings API error: ${response.status} ${err}`);
-      }
-
-      const data = await response.json() as { embeddings: Array<{ values: number[] }> };
-      return data.embeddings.map(e => e.values);
-    }, { label: 'Gemini batchEmbedContents' });
-  }
-
-  dimensions(): number {
-    return this.dims;
-  }
-}
 
 // ============================================================
 // Local/Minimal Embeddings (for testing without API keys)
@@ -254,31 +149,18 @@ export class LocalEmbeddings implements EmbeddingProvider {
 // ============================================================
 
 /**
- * Build the configured embedder, or undefined when the selected provider has
- * no API key (the vault then falls back to keyword search).
+ * Build the embedder, or undefined when no API key is configured (the vault
+ * then refuses to open unless ENGRAM_ALLOW_NO_EMBEDDER=1).
  *
  * Replaces the key-sniffing that was duplicated in mcp.ts and server.ts.
  */
 export function createEmbedder(opts?: {
-  provider?: string;
   apiKey?: string;
   model?: string;
   dims?: number;
   baseUrl?: string;
 }): EmbeddingProvider | undefined {
-  let provider: ModelProvider;
-  try {
-    provider = resolveModelProvider(opts?.provider);
-  } catch {
-    return undefined; // nothing configured — keyword-only mode
-  }
-
-  if (provider === 'gemini') {
-    const key = opts?.apiKey ?? process.env.GEMINI_API_KEY;
-    if (!key?.trim()) return undefined;
-    return new GeminiEmbeddings(key, opts?.model, opts?.dims);
-  }
-
+  assertSupportedProvider();
   const key = opts?.apiKey ?? process.env.OPENAI_API_KEY;
   if (!key?.trim()) return undefined;
   return new OpenAIEmbeddings(key, opts?.model, opts?.dims, opts?.baseUrl);

@@ -17,11 +17,11 @@
       },
       "environmentVariables": [
         {
-          "description": "Google Gemini API key for embeddings and LLM operations",
+          "description": "API key for the OpenAI-compatible embeddings and chat endpoints",
           "isRequired": true,
           "format": "string",
           "isSecret": true,
-          "name": "GEMINI_API_KEY"
+          "name": "OPENAI_API_KEY"
         }
       ]
     }

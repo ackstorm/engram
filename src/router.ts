@@ -57,9 +57,9 @@ export class MemoryRouter {
     // into a much weaker system is the thing worth preventing.
     if (!embedder && process.env.ENGRAM_ALLOW_NO_EMBEDDER !== '1') {
       throw new Error(
-        '[engram] No embedding provider configured, so recall would fall back to ' +
-        'keyword-only search (roughly half the accuracy). Set MODEL_PROVIDER to ' +
-        "'openai' or 'gemini' with the matching API key, or set " +
+        '[engram] No embedding key configured, so recall would fall back to ' +
+        'keyword-only search (roughly half the accuracy). Set OPENAI_API_KEY ' +
+        '(with OPENAI_BASE_URL if you use a gateway), or set ' +
         'ENGRAM_ALLOW_NO_EMBEDDER=1 to accept keyword-only retrieval.',
       );
     }

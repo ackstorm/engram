@@ -15,6 +15,8 @@
 
 import type { Vault } from './vault.js';
 import type { Memory, VaultConfig } from './types.js';
+import { chatJson } from './llm.js';
+import { resolveLlmModel } from './config.js';
 
 export interface IngestOptions {
   agentId?: string;
@@ -190,58 +192,13 @@ export async function ingestDailyLog(
 }
 
 // ============================================================
-// LLM call helper (shared with vault.ts — TODO: extract to shared module)
+// LLM call helper
 // ============================================================
 
 async function callLLM(config: NonNullable<VaultConfig['llm']>, prompt: string): Promise<string> {
-  if (config.provider === 'anthropic') {
-    const model = config.model ?? 'claude-3-5-haiku-20241022';
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Anthropic API error: ${response.status}`);
-    }
-
-    const data = await response.json() as { content: Array<{ type: string; text: string }> };
-    const text = data.content?.find(c => c.type === 'text')?.text ?? '';
-    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) ?? text.match(/\{[\s\S]*\}/);
-    return jsonMatch ? (jsonMatch[1] ?? jsonMatch[0]) : text;
-  }
-
-  if (config.provider === 'openai') {
-    const model = config.model ?? 'gpt-4o-mini';
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.status}`);
-    }
-
-    const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-    return data.choices[0]?.message?.content ?? '';
-  }
-
-  throw new Error(`Unsupported provider: ${config.provider}`);
+  return chatJson(prompt, {
+    apiKey: config.apiKey,
+    model: resolveLlmModel(config.model),
+    baseUrl: config.baseUrl,
+  });
 }

@@ -230,22 +230,17 @@ async function runInit(values: Record<string, unknown>) {
   // available via --owner flag or ENGRAM_OWNER env var for advanced users.
   const owner = (values.owner as string) || 'default';
 
-  // 3. Ask for Gemini key (optional but recommended)
-  let geminiKey = process.env.GEMINI_API_KEY || '';
-  const geminiKeyPath = join(home, '.config', 'engram', 'gemini-key');
-  if (!geminiKey && existsSync(geminiKeyPath)) {
-    geminiKey = readFileSync(geminiKeyPath, 'utf-8').trim();
-  }
-  if (!geminiKey) {
-    console.log(yellow('\n  ⚡ Gemini API key required for semantic search & consolidation.'));
-    console.log('     Without it, Engram stores memories but can\'t find them intelligently.\n');
-    console.log(dim('     Get a free key at: ') + cyan('https://aistudio.google.com/apikey') + '\n');
-    geminiKey = (await ask('  Gemini API key: ')).trim();
-    if (!geminiKey) {
-      console.log(dim('  ℹ Skipped — you can add it later via GEMINI_API_KEY env var or re-run engram init'));
-    }
+  // 3. Check for an embedding key. Deliberately NOT prompted for and NOT
+  // written to disk: init used to cache one at ~/.config/engram/gemini-key
+  // with default permissions, leaving a plaintext credential readable by every
+  // account on the machine. The env var is the only supported source.
+  const hasApiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+  if (hasApiKey) {
+    console.log(`  ${green('✓')} OPENAI_API_KEY found`);
   } else {
-    console.log(`  ${green('✓')} Gemini API key found`);
+    console.log(yellow('\n  ⚡ OPENAI_API_KEY is required for semantic search & consolidation.'));
+    console.log('     Without it, Engram stores memories but can\'t find them intelligently.\n');
+    console.log(dim('     Any OpenAI-compatible gateway works — set OPENAI_BASE_URL to point at it.\n'));
   }
 
   // 4. Register with detected tools
@@ -310,7 +305,6 @@ async function runInit(values: Record<string, unknown>) {
   // Advanced users can set ENGRAM_OWNER for multi-agent isolation.
   const mcpEnv: Record<string, string> = {
     ...(owner !== 'default' ? { ENGRAM_OWNER: owner } : {}),
-    ...(geminiKey ? { GEMINI_API_KEY: geminiKey } : {}),
     ...(nodeBinDir ? { PATH: isWindows ? `${nodeBinDir};${process.env.PATH ?? ''}` : `${nodeBinDir}:/usr/local/bin:/usr/bin:/bin` } : {}),
   };
 
@@ -429,11 +423,7 @@ async function runInit(values: Record<string, unknown>) {
   if (targets.length === 0) {
     console.log(yellow('\n  No supported MCP client detected (Claude Code, Cursor, Windsurf).'));
     console.log('  Add this to your MCP client config:\n');
-    const display = JSON.parse(JSON.stringify({ mcpServers: { engram: mcpConfig } }));
-    if (display.mcpServers?.engram?.env?.GEMINI_API_KEY) {
-      const key = display.mcpServers.engram.env.GEMINI_API_KEY as string;
-      display.mcpServers.engram.env.GEMINI_API_KEY = key.slice(0, 6) + '...' + key.slice(-4);
-    }
+    const display = { mcpServers: { engram: mcpConfig } };
     console.log('  ' + JSON.stringify(display, null, 2).split('\n').join('\n  '));
   }
 
@@ -522,14 +512,6 @@ async function runInit(values: Record<string, unknown>) {
     } catch {
       // Non-critical — MCP tool descriptions already teach scope/type.
     }
-  }
-
-  // 6. Save Gemini key if provided
-  if (geminiKey) {
-    const configDir = join(home, '.config', 'engram');
-    mkdirSync(configDir, { recursive: true });
-    writeFileSync(geminiKeyPath, geminiKey);
-    console.log(`  ${green('✓')} Gemini key saved`);
   }
 
   // 7. Set up auto-consolidation (session-end hook)
@@ -710,7 +692,6 @@ async function runShadow(subcommand: string, values: Record<string, unknown>) {
   const engramDir = path.join(homedir(), '.engram');
   mkdirSync(engramDir, { recursive: true });
   const dbPath = path.join(engramDir, `${owner}.db`);
-  const geminiKey = process.env.GEMINI_API_KEY ?? '';
 
   function isRunning(pidFile: string): boolean {
     if (!existsSync(pidFile)) return false;
@@ -736,7 +717,6 @@ async function runShadow(subcommand: string, values: Record<string, unknown>) {
         ...process.env,
         ENGRAM_OWNER: owner,
         ENGRAM_DB_PATH: dbPath,
-        GEMINI_API_KEY: geminiKey,
       };
 
       const server = spawn('node', [serverPath], {
@@ -770,7 +750,6 @@ async function runShadow(subcommand: string, values: Record<string, unknown>) {
       const watcherEnv = {
         ...process.env,
         ENGRAM_API: `http://127.0.0.1:${serverPort}/v1`,
-        GEMINI_API_KEY: geminiKey,
         ENGRAM_INGEST_INTERVAL_MS: '300000',
       };
 
@@ -1021,19 +1000,20 @@ async function runDoctor(values: Record<string, unknown>) {
     }
   }
 
-  // 2. Gemini API key configured
-  let geminiKey = process.env.GEMINI_API_KEY || '';
-  const geminiKeyPath = join(home, '.config', 'engram', 'gemini-key');
-  if (!geminiKey && existsSync(geminiKeyPath)) {
-    geminiKey = readFileSync(geminiKeyPath, 'utf-8').trim();
-  }
-  check(!!geminiKey, 'Gemini API key configured', geminiKey ? `${geminiKey.slice(0, 6)}...${geminiKey.slice(-4)}` : 'Set GEMINI_API_KEY or run engram init');
+  // 2. Embedding key configured. Env only — no on-disk cache to read.
+  const apiKey = process.env.OPENAI_API_KEY?.trim() ?? '';
+  check(
+    !!apiKey,
+    'OPENAI_API_KEY configured',
+    apiKey ? `${apiKey.slice(0, 6)}...${apiKey.slice(-4)}` : 'Set OPENAI_API_KEY',
+  );
 
   // 3. Embedding works
-  if (geminiKey) {
+  if (apiKey) {
     try {
-      const { GeminiEmbeddings } = await import('./embeddings.js');
-      const embedder = new GeminiEmbeddings(geminiKey);
+      const { createEmbedder } = await import('./embeddings.js');
+      const embedder = createEmbedder();
+      if (!embedder) throw new Error('createEmbedder returned nothing');
       const start = Date.now();
       await embedder.embed('engram doctor test');
       const latency = Date.now() - start;

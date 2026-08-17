@@ -17,7 +17,8 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { geminiEndpoint, geminiHeaders, resolveLlmModel } from './config.js';
+import { resolveLlmModel } from './config.js';
+import { chatJson } from './llm.js';
 
 // ============================================================
 // Config
@@ -25,7 +26,7 @@ import { geminiEndpoint, geminiHeaders, resolveLlmModel } from './config.js';
 
 const ENGRAM_API = process.env.ENGRAM_API ?? 'http://127.0.0.1:3800/v1';
 const ENGRAM_AUTH = process.env.ENGRAM_AUTH_TOKEN ? `Bearer ${process.env.ENGRAM_AUTH_TOKEN}` : '';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const LLM_API_KEY = process.env.ENGRAM_LLM_API_KEY ?? process.env.OPENAI_API_KEY;
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 const STATE_PATH = join(homedir(), '.config', 'engram', 'claude-watcher-state.json');
 const MIN_CHUNK_SIZE = 200;
@@ -291,32 +292,12 @@ Respond as JSON:
 If the session is trivial (just fixing typos, running commands), respond: {"memories": []}`;
 
   try {
-    const response = await fetch(
-      geminiEndpoint(resolveLlmModel(), 'generateContent'),
-      {
-        method: 'POST',
-        headers: geminiHeaders(GEMINI_API_KEY!),
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },
-        }),
-      },
-    );
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        console.warn(`  Rate limited, waiting 15s...`);
-        await new Promise(r => setTimeout(r, 15000));
-        // Don't retry — will pick up on next cycle
-      } else {
-        console.error(`  Gemini API error: ${response.status}`);
-      }
-      return 0;
-    }
-
-    const data = await response.json() as any;
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
-    const parsed = JSON.parse(text);
+    const text = await chatJson(prompt, {
+      apiKey: LLM_API_KEY!,
+      model: resolveLlmModel(),
+      maxTokens: 2048,
+    });
+    const parsed = JSON.parse(text || '{}');
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (ENGRAM_AUTH) headers['Authorization'] = ENGRAM_AUTH;
@@ -376,9 +357,9 @@ async function run(): Promise<{ memoriesCreated: number; sessions: number }> {
     console.log(`Processing ${session.project} (${turns.length} new turns)...`);
     sessionsProcessed++;
 
-    // Smart mode: if we have Gemini, send the whole session as one summary request
-    // instead of chunking raw text. Much better signal-to-noise.
-    if (GEMINI_API_KEY && turns.length >= 3) {
+    // Smart mode: with an LLM key, send the whole session as one summary
+    // request instead of chunking raw text. Much better signal-to-noise.
+    if (LLM_API_KEY && turns.length >= 3) {
       const created = await ingestSessionSummary(turns, session.project);
       totalCreated += created;
 

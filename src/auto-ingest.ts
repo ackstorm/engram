@@ -16,14 +16,15 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { geminiEndpoint, geminiHeaders, resolveLlmModel } from './config.js';
+import { resolveLlmModel } from './config.js';
+import { chatJson } from './llm.js';
 
 // ============================================================
 // Config
 // ============================================================
 
 const ENGRAM_API = process.env.ENGRAM_API ?? 'http://127.0.0.1:3800/v1';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const LLM_API_KEY = process.env.ENGRAM_LLM_API_KEY ?? process.env.OPENAI_API_KEY;
 const STATE_PATH = join(homedir(), '.config', 'engram', 'ingest-state.json');
 // Directory containing JSONL session transcripts. Override with ENGRAM_SESSIONS_DIR
 // to point at any agent harness that writes sessions in that format.
@@ -193,7 +194,7 @@ interface IngestResult {
 
 async function ingestChunk(chunk: string): Promise<number> {
   // Use the LLM-powered ingest if available, otherwise fall back to simple remember
-  if (GEMINI_API_KEY) {
+  if (LLM_API_KEY) {
     return await llmIngest(chunk);
   } else {
     // Simple mode: store the chunk as a single episodic memory
@@ -228,71 +229,14 @@ Respond as JSON:
 If nothing worth remembering, respond: {"memories": []}`;
 
   try {
-    const response = await fetch(
-      geminiEndpoint(resolveLlmModel(), 'generateContent'),
-      {
-        method: 'POST',
-        headers: geminiHeaders(GEMINI_API_KEY!),
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },
-        }),
-      },
-    );
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        // Rate limited — back off and retry once
-        console.warn(`Gemini rate limited, waiting 15s and retrying...`);
-        await new Promise(resolve => setTimeout(resolve, 15000));
-        const retry = await fetch(
-          geminiEndpoint(resolveLlmModel(), 'generateContent'),
-          {
-            method: 'POST',
-            headers: geminiHeaders(GEMINI_API_KEY!),
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },
-            }),
-          },
-        );
-        if (!retry.ok) {
-          console.error(`Gemini API error after retry: ${retry.status}`);
-          return 0;
-        }
-        const retryData = await retry.json() as any;
-        const retryText = retryData.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
-        const retryParsed = JSON.parse(retryText);
-        // Process retry results below
-        let created = 0;
-        for (const mem of retryParsed.memories ?? []) {
-          if (mem.salience < 0.2) continue;
-          if (/(?:sk-|api[_-]?key|password|token|secret)[:\s=]+\S{10,}/i.test(mem.content)) continue;
-          if (/AIza[a-zA-Z0-9_-]{30,}/.test(mem.content)) continue;
-          const res = await fetch(`${ENGRAM_API}/memories`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              content: mem.content,
-              type: mem.type ?? 'episodic',
-              entities: mem.entities ?? [],
-              topics: [...(mem.topics ?? []), 'auto-ingested'],
-              salience: mem.salience ?? 0.5,
-              status: mem.status ?? 'active',
-              source: { type: 'conversation' as const },
-            }),
-          });
-          if (res.ok) created++;
-        }
-        return created;
-      }
-      console.error(`Gemini API error: ${response.status}`);
-      return 0;
-    }
-
-    const data = await response.json() as any;
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
-    const parsed = JSON.parse(text);
+    // chatJson retries rate limits itself, which replaces the hand-rolled
+    // single retry that used to duplicate this whole result-handling block.
+    const text = await chatJson(prompt, {
+      apiKey: LLM_API_KEY!,
+      model: resolveLlmModel(),
+      maxTokens: 2048,
+    });
+    const parsed = JSON.parse(text || '{}');
 
     let created = 0;
     for (const mem of parsed.memories ?? []) {

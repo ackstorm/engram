@@ -212,7 +212,7 @@ export class MemoryStore {
         throw new Error(
           `[engram] Vault at ${this.dbPath} was built with ${row.value}-dimension embeddings ` +
           `but the current configuration produces ${this.embeddingDimensions}. ` +
-          'Changing embedding model or MODEL_PROVIDER invalidates every stored vector. ' +
+          'Changing the embedding model invalidates every stored vector. ' +
           'Either restore the previous embedding settings, or start a new vault ' +
           '(ENGRAM_DB_PATH) and re-import.',
         );

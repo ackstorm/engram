@@ -31,7 +31,7 @@ jobs:
       - name: Build
         run: npm run build
 
+      # No API key: the suite is hermetic and must stay that way. Tests that
+      # need a vault set ENGRAM_ALLOW_NO_EMBEDDER=1 themselves.
       - name: Test
         run: npm test
-        env:
-          ENGRAM_LLM_API_KEY: ${{ secrets.GEMINI_API_KEY }}

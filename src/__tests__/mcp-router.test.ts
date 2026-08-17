@@ -8,7 +8,12 @@ import { tmpdir } from 'os';
 function mcpCall(env: Record<string, string>, ...messages: unknown[]) {
   const input = messages.map(m => JSON.stringify(m)).join('\n') + '\n';
   const r = spawnSync('npx', ['tsx', 'src/mcp.ts'], {
-    input, encoding: 'utf-8', timeout: 120_000, env: { ...process.env, ...env },
+    input,
+    encoding: 'utf-8',
+    timeout: 120_000,
+    // ALLOW_NO_EMBEDDER: these assert tool schemas, not retrieval quality.
+    // Without it they depend on an API key being present in the shell.
+    env: { ...process.env, ENGRAM_ALLOW_NO_EMBEDDER: '1', ...env },
   });
   const frames = r.stdout.split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
   return { frames, stderr: r.stderr };

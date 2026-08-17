@@ -12,7 +12,14 @@ describe('MCP HTTP transport startup', () => {
   it('refuses to start without ENGRAM_AUTH_TOKEN', () => {
     const dir = mkdtempSync(join(tmpdir(), 'engram-mcp-http-'));
     try {
-      const env = { ...process.env, ENGRAM_DB_PATH: join(dir, 'test.db') };
+      // ALLOW_NO_EMBEDDER because this exercises transport startup, not
+      // retrieval — without it the test silently depends on whatever API key
+      // happens to be in the developer's shell.
+      const env = {
+        ...process.env,
+        ENGRAM_DB_PATH: join(dir, 'test.db'),
+        ENGRAM_ALLOW_NO_EMBEDDER: '1',
+      };
       delete env.ENGRAM_AUTH_TOKEN;
 
       const result = spawnSync('npx', ['tsx', 'src/mcp.ts', '--http'], {
@@ -35,6 +42,7 @@ describe('MCP HTTP transport startup', () => {
         ...process.env,
         ENGRAM_DB_PATH: join(dir, 'test.db'),
         ENGRAM_SESSIONS_DIR: join(dir, 'no-sessions'),
+        ENGRAM_ALLOW_NO_EMBEDDER: '1',
       };
       delete env.ENGRAM_AUTH_TOKEN;
 

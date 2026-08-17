@@ -3,7 +3,7 @@
 // ============================================================
 //
 // Usage:
-//   MODEL_PROVIDER=openai OPENAI_API_KEY=… OPENAI_BASE_URL=https://host \
+//   OPENAI_API_KEY=… OPENAI_BASE_URL=https://host \
 //   ENGRAM_EMBEDDING_MODEL=text-embedding-3-small \
 //   npx tsx eval/retrieval.ts [--verbose] [--keyword-only]
 //
@@ -35,8 +35,8 @@ async function main(): Promise<void> {
   const embedder = KEYWORD_ONLY ? undefined : createEmbedder();
   if (!KEYWORD_ONLY && !embedder) {
     console.error(
-      'No embedder configured. Set MODEL_PROVIDER and the matching API key, ' +
-      'or pass --keyword-only to measure the lexical path alone.',
+      'No embedder configured. Set OPENAI_API_KEY (and OPENAI_BASE_URL for a ' +
+      'gateway), or pass --keyword-only to measure the lexical path alone.',
     );
     process.exit(1);
   }
@@ -102,9 +102,10 @@ function countEmbedded(vault: Vault): number {
 }
 
 function describeEmbedder(): string {
-  const provider = process.env.MODEL_PROVIDER ?? 'inferred';
-  const model = process.env.ENGRAM_EMBEDDING_MODEL ?? 'provider default';
-  return `${provider} / ${model}`;
+  const model = process.env.ENGRAM_EMBEDDING_MODEL ?? 'default';
+  const host = process.env.OPENAI_BASE_URL ?? 'https://api.openai.com';
+  const dims = process.env.ENGRAM_EMBEDDING_DIMS ?? 'native';
+  return `${model} @ ${dims} dims via ${host}`;
 }
 
 function pct(n: number, d: number): string {

@@ -14,7 +14,7 @@
 //         "args": ["engram", "mcp"],
 //         "env": {
 //           "ENGRAM_OWNER": "my-agent",
-//           "GEMINI_API_KEY": "your-key-here"
+//           "OPENAI_API_KEY": "your-key-here"
 //         }
 //       }
 //     }
@@ -25,7 +25,8 @@
 
 // Must be the first import — protects stdout before anything else can log.
 import './stdio-guard.js';
-import { geminiEndpoint, geminiHeaders, resolveLlmModel } from './config.js';
+import { resolveLlmModel } from './config.js';
+import { chatJson } from './llm.js';
 import { requireAuthToken, checkBearerToken, resolveCorsOrigin, corsAllowlist } from './config.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -48,14 +49,11 @@ checkForUpdates();
 // Config from environment
 // ============================================================
 
-const geminiKey = process.env.GEMINI_API_KEY;
+// One key serves both the embedding and chat routes on an OpenAI-compatible
+// gateway; ENGRAM_LLM_API_KEY splits them when the two live behind different keys.
 const openaiKey = process.env.OPENAI_API_KEY;
-const anthropicKey = process.env.ANTHROPIC_API_KEY;
-
-// Determine LLM provider (for startup banner / engram_ingest's LLM-vs-simple branch)
-const llmProvider = process.env.ENGRAM_LLM_PROVIDER ??
-  (geminiKey ? 'gemini' : openaiKey ? 'openai' : anthropicKey ? 'anthropic' : undefined);
-const hasEmbedder = Boolean(geminiKey || openaiKey);
+const llmKey = process.env.ENGRAM_LLM_API_KEY ?? openaiKey;
+const hasEmbedder = Boolean(openaiKey);
 
 // ============================================================
 // Initialize the router — global vault + per-project vault
@@ -316,10 +314,10 @@ server.tool(
     humanName: z.string().optional().describe('Name of the human in the conversation'),
   },
   async (args) => {
-    if (!geminiKey) {
+    if (!llmKey) {
       // Simple mode: just remember with auto-extraction
-      const memory = router.remember(args.scope, { content: args.text });
-      return { content: [{ type: 'text', text: `Stored 1 memory (simple mode — set GEMINI_API_KEY for LLM extraction).` }] };
+      router.remember(args.scope, { content: args.text });
+      return { content: [{ type: 'text', text: `Stored 1 memory (simple mode — set OPENAI_API_KEY for LLM extraction).` }] };
     }
 
     // LLM extraction — facts AND behavioral signals
@@ -357,26 +355,12 @@ JSON: {"memories": [{"content":"...","type":"...","entities":["..."],"topics":["
 If nothing worth remembering: {"memories": []}`;
 
     try {
-      const response = await fetch(
-        geminiEndpoint(resolveLlmModel(), 'generateContent'),
-        {
-          method: 'POST',
-          headers: geminiHeaders(geminiKey),
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 2048 },
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        const memory = router.remember(args.scope, { content: args.text });
-        return { content: [{ type: 'text', text: `LLM unavailable, stored 1 raw memory as fallback.` }] };
-      }
-
-      const data = await response.json() as any;
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
-      const parsed = JSON.parse(text);
+      const text = await chatJson(prompt, {
+        apiKey: llmKey,
+        model: resolveLlmModel(),
+        maxTokens: 2048,
+      });
+      const parsed = JSON.parse(text || '{}');
 
       let created = 0;
       for (const mem of parsed.memories ?? []) {
@@ -902,8 +886,8 @@ async function main() {
       console.error(`🧠 Engram MCP server running (HTTP, ${mcpHost}:${mcpPort})`);
       console.error(`   Endpoint: http://${mcpHost}:${mcpPort}/mcp (bearer token required)`);
       printStoreBanner();
-      if (hasEmbedder) console.error(`   Embeddings: ${geminiKey ? 'Gemini' : 'OpenAI'}`);
-      if (llmProvider) console.error(`   LLM: ${llmProvider} (consolidation enabled)`);
+      if (hasEmbedder) console.error(`   Embeddings: OpenAI-compatible`);
+      if (llmKey) console.error(`   LLM: OpenAI-compatible (consolidation enabled)`);
     });
   } else {
     // Default: stdio transport for local MCP (Claude Code, Cursor, etc.)
@@ -911,8 +895,8 @@ async function main() {
     await server.connect(transport);
     console.error(`🧠 Engram MCP server running`);
     printStoreBanner();
-    if (hasEmbedder) console.error(`   Embeddings: ${geminiKey ? 'Gemini' : 'OpenAI'}`);
-    if (llmProvider) console.error(`   LLM: ${llmProvider} (consolidation enabled)`);
+    if (hasEmbedder) console.error(`   Embeddings: OpenAI-compatible`);
+    if (llmKey) console.error(`   LLM: OpenAI-compatible (consolidation enabled)`);
   }
 
   // Auto-ingest recent transcripts on startup (best-effort, non-blocking)

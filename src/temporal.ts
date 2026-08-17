@@ -140,7 +140,7 @@ export function findContradictionCandidates(
  *
  * Returns null if no contradiction, or a ContradictionResult if confirmed.
  *
- * TODO: Implement with Gemini call
+ * TODO: Implement with an LLM call
  */
 export async function verifyContradiction(
   newMemory: Memory,

@@ -1,7 +1,7 @@
 # Embedding configuration is immutable per vault
 
 **Status:** permanent architectural constraint of the SQLite/sqlite-vec design.
-**Applies to:** `MODEL_PROVIDER`, `ENGRAM_EMBEDDING_MODEL`, `ENGRAM_EMBEDDING_DIMS`.
+**Applies to:** `ENGRAM_EMBEDDING_MODEL`, `ENGRAM_EMBEDDING_DIMS`.
 
 ## The constraint
 
@@ -39,14 +39,19 @@ similarity between a `gemini-embedding-001` vector and a
 `text-embedding-3-small` vector is noise, so recall silently degrades rather
 than erroring.
 
-### Provider defaults
+### Known model widths
 
-| Provider | Default model | Dimensions |
-|---|---|---|
-| `gemini` | `gemini-embedding-001` | 3072 |
-| `openai` | `text-embedding-3-small` | 1536 |
+| Model | Dimensions |
+|---|---|
+| `text-embedding-3-small` | 1536 |
+| `text-embedding-3-large` | 3072 |
+| `text-embedding-ada-002` | 1536 |
+| `gemini-embedding-001` | 3072 |
 
-Switching `MODEL_PROVIDER` between these two therefore always changes the width.
+Widths are derived from the model name, matched on suffix so a gateway-namespaced
+`openai.text-embedding-3-large` resolves the same as the bare name. An
+unrecognised model falls back to 1536, which is why `ENGRAM_EMBEDDING_DIMS`
+exists.
 
 ## The guard
 
@@ -55,8 +60,8 @@ creation and throws on mismatch at open time:
 
 ```
 [engram] Vault at <path> was built with 3072-dimension embeddings but the
-current configuration produces 1536. Changing embedding model or
-MODEL_PROVIDER invalidates every stored vector.
+current configuration produces 1536. Changing the embedding model
+invalidates every stored vector.
 ```
 
 This converts silent corruption into a startup failure. It does **not** make the
@@ -83,17 +88,16 @@ Budget the embedding API cost of re-embedding the entire vault.
 
 ## Practical guidance
 
-- **Decide the provider before the vault has content.** This is the cheapest
+- **Decide the model before the vault has content.** This is the cheapest
   possible moment to choose.
 - **Set `ENGRAM_EMBEDDING_MODEL` and `ENGRAM_EMBEDDING_DIMS` together** or not at
   all. Setting one without the other produces a vault whose stored width does
   not match what the model returns.
-- **Pin the values in `docker-compose.yml`** rather than leaving them to
-  inference from whichever API key happens to be present — key-based inference
-  means adding an `OPENAI_API_KEY` to an existing Gemini deployment can flip the
-  provider.
-- **A vault is not portable across providers.** Treat `~/.engram/*.db` as
-  coupled to the embedding configuration that produced it.
+- **Pin the values in `docker-compose.yml`** rather than relying on the
+  name-derived default — a gateway that renames a model changes the derived
+  width with it.
+- **A vault is not portable across models.** Treat `~/.engram/*.db` as coupled
+  to the embedding configuration that produced it.
 
 ## Related gap
 

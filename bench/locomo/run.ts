@@ -2,7 +2,7 @@
 // against the gold evidence dia_ids. No answering LLM, no judge.
 //
 // Usage: npx tsx bench/locomo/run.ts [convIndex=0] [topK=10]
-// Needs GEMINI_API_KEY (or OPENAI_API_KEY) for embeddings.
+// Needs OPENAI_API_KEY for embeddings.
 // The ingested vault is cached in bench/locomo/.cache/conv<i>.db — delete it
 // to re-ingest (embedding config is immutable per vault).
 
@@ -30,7 +30,7 @@ const sample = dataset[convIndex];
 if (!sample) throw new Error(`No conversation at index ${convIndex} (0-${dataset.length - 1})`);
 
 const embedder = createEmbedder();
-if (!embedder) throw new Error('No embedding provider configured — set GEMINI_API_KEY or OPENAI_API_KEY');
+if (!embedder) throw new Error('No embedding key configured — set OPENAI_API_KEY');
 
 const cacheDir = path.join(import.meta.dirname, '.cache');
 mkdirSync(cacheDir, { recursive: true });

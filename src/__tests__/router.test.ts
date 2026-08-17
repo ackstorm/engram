@@ -228,7 +228,7 @@ describe('MemoryRouter.open requires an embedder', () => {
   });
 
   it('refuses to open with no embedding provider', () => {
-    expect(() => MemoryRouter.open()).toThrow(/MODEL_PROVIDER/);
+    expect(() => MemoryRouter.open()).toThrow(/OPENAI_API_KEY/);
     expect(() => MemoryRouter.open()).toThrow(/keyword-only/);
   });
 
