@@ -16,6 +16,13 @@ import yaml from 'js-yaml';
 // Engram CLI — Quick interface for testing & exploration
 // ============================================================
 
+/**
+ * Binary-lookup command. Every child process below goes through
+ * execFileSync with an argv array rather than execSync with a string, so
+ * nothing interpolated into a command can reach a shell.
+ */
+const WHICH = process.platform === 'win32' ? 'where' : 'which';
+
 function getEngramInstructions(): string {
   return `
 ## Engram — Persistent Memory
@@ -178,11 +185,7 @@ async function runInit(values: Record<string, unknown>) {
   const { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } = await import('fs');
   const { homedir } = await import('os');
   const { join } = await import('path');
-  const { createInterface } = await import('readline');
-  const { execSync } = await import('child_process');
-
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q: string): Promise<string> => new Promise(r => rl.question(q, r));
+  const { execFileSync } = await import('child_process');
 
   console.log(bold('\n🧠 Engram Setup\n'));
   console.log('This will configure Engram as an MCP server for your AI coding agent.\n');
@@ -192,7 +195,7 @@ async function runInit(values: Record<string, unknown>) {
   // 1. Detect which tools are installed
   let hasClaudeCode = false;
   try {
-    execSync('which claude', { stdio: 'ignore' });
+    execFileSync(WHICH, ['claude'], { stdio: 'ignore' });
     hasClaudeCode = true;
   } catch {}
 
@@ -207,21 +210,21 @@ async function runInit(values: Record<string, unknown>) {
   // VS Code — check for code binary and MCP config location
   let hasVSCode = false;
   try {
-    execSync('which code', { stdio: 'ignore' });
+    execFileSync(WHICH, ['code'], { stdio: 'ignore' });
     hasVSCode = true;
   } catch {}
 
   // Gemini CLI
   let hasGeminiCLI = false;
   try {
-    execSync('which gemini', { stdio: 'ignore' });
+    execFileSync(WHICH, ['gemini'], { stdio: 'ignore' });
     hasGeminiCLI = true;
   } catch {}
 
   // Codex (OpenAI)
   let hasCodex = false;
   try {
-    execSync('which codex', { stdio: 'ignore' });
+    execFileSync(WHICH, ['codex'], { stdio: 'ignore' });
     hasCodex = true;
   } catch {}
 
@@ -248,22 +251,21 @@ async function runInit(values: Record<string, unknown>) {
 
   // Resolve full paths to avoid PATH issues in sandboxed environments (Claude Code, etc.)
   const isWindows = process.platform === 'win32';
-  const whichCmd = isWindows ? 'where' : 'which';
   let engramBin = 'npx';
   let engramArgs = ['engram', 'mcp'];
   let nodeBinDir = '';
   try {
-    const resolvedEngram = execSync(`${whichCmd} engram`, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
+    const resolvedEngram = execFileSync(WHICH, ['engram'], { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
     if (resolvedEngram) {
       if (isWindows) {
         // On Windows, npm creates .cmd shims. Claude Code / MCP hosts can't
         // execute .cmd directly, so use node + the .js entry point instead.
-        const resolvedNode = execSync(`${whichCmd} node`, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
+        const resolvedNode = execFileSync(WHICH, ['node'], { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
         const { dirname, join: pjoin } = await import('path');
         // Find the actual JS file: engram bin points to dist/cli.js
         // npm global prefix: npm root -g → node_modules, engram-sdk/dist/cli.js
         try {
-          const npmRoot = execSync('npm root -g', { encoding: 'utf-8' }).trim();
+          const npmRoot = execFileSync('npm', ['root', '-g'], { encoding: 'utf-8' }).trim();
           const mcpJs = pjoin(npmRoot, 'engram-sdk', 'dist', 'mcp.js');
           if (existsSync(mcpJs)) {
             engramBin = resolvedNode;
@@ -292,7 +294,7 @@ async function runInit(values: Record<string, unknown>) {
   } catch {}
   if (!nodeBinDir) {
     try {
-      const resolvedNode = execSync(`${whichCmd} node`, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
+      const resolvedNode = execFileSync(WHICH, ['node'], { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
       if (resolvedNode) {
         const { dirname } = await import('path');
         nodeBinDir = dirname(resolvedNode);
@@ -319,10 +321,16 @@ async function runInit(values: Record<string, unknown>) {
   if (hasClaudeCode) {
     try {
       // Remove existing engram server if present (idempotent re-init)
-      try { execSync('claude mcp remove engram', { stdio: 'ignore' }); } catch {}
+      try { execFileSync('claude', ['mcp', 'remove', 'engram'], { stdio: 'ignore' }); } catch {}
       const envArgs = Object.entries(mcpEnv).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-      const args = ['claude', 'mcp', 'add', '-s', 'user', ...envArgs, '--', 'engram', engramBin, ...engramArgs];
-      execSync(args.join(' '), { stdio: 'ignore' });
+      // execFileSync, not execSync(args.join(' ')): mcpEnv carries ENGRAM_OWNER
+      // straight from --owner and a PATH built from process.env, so joining
+      // into a shell string made `engram init --owner 'x; rm -rf ~'` run.
+      execFileSync(
+        'claude',
+        ['mcp', 'add', '-s', 'user', ...envArgs, '--', 'engram', engramBin, ...engramArgs],
+        { stdio: 'ignore' },
+      );
       targets.push('Claude Code');
       console.log(`  ${green('✓')} Registered with Claude Code`);
     } catch {
@@ -370,7 +378,7 @@ async function runInit(values: Record<string, unknown>) {
   if (hasVSCode) {
     try {
       const mcpJson = JSON.stringify({ name: 'engram', command: engramBin, args: engramArgs, env: mcpEnv });
-      execSync(`code --add-mcp '${mcpJson.replace(/'/g, "'\\''")}'`, { stdio: 'ignore' });
+      execFileSync('code', ['--add-mcp', mcpJson], { stdio: 'ignore' });
       targets.push('VS Code');
       console.log(`  ${green('✓')} Registered with VS Code`);
     } catch {
@@ -624,8 +632,6 @@ async function runInit(values: Record<string, unknown>) {
 
   // ── Capability Delta ──
   showCapabilityDelta(home);
-
-  rl.close();
 }
 
 function showCapabilityDelta(home: string) {
@@ -683,7 +689,7 @@ const WATCHER_PID_FILE = path.join(SHADOW_PID_DIR, 'shadow-watcher.pid');
 
 async function runShadow(subcommand: string, values: Record<string, unknown>) {
   const { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } = await import('fs');
-  const { execSync, spawn } = await import('child_process');
+  const { spawn } = await import('child_process');
   const { homedir } = await import('os');
 
   mkdirSync(SHADOW_PID_DIR, { recursive: true });
@@ -938,7 +944,7 @@ async function runDoctor(values: Record<string, unknown>) {
   const { existsSync, readFileSync } = await import('fs');
   const { homedir } = await import('os');
   const { join } = await import('path');
-  const { execSync } = await import('child_process');
+  const { execFileSync } = await import('child_process');
 
   const home = homedir();
   let passed = 0;
@@ -1030,7 +1036,7 @@ async function runDoctor(values: Record<string, unknown>) {
   let mcpTarget = '';
   // Check Claude Code
   try {
-    const mcpList = execSync('claude mcp list', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+    const mcpList = execFileSync('claude', ['mcp', 'list'], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
     if (mcpList.includes('engram')) {
       mcpRegistered = true;
       mcpTarget = 'Claude Code';

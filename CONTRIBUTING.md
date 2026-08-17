@@ -5,7 +5,7 @@ Thanks for wanting to contribute! Engram is early-stage and moving fast — cont
 ## Getting Started
 
 ```bash
-git clone https://github.com/tstockham96/engram.git
+git clone https://github.com/ackstorm/engram.git
 cd engram
 npm install
 npm test        # Run all tests

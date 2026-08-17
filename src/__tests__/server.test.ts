@@ -343,7 +343,7 @@ describe('Attribution', () => {
     expect(data.attribution).toBeDefined();
     expect(data.attribution.enabled).toBe(true);
     expect(data.attribution.text).toContain('Engram');
-    expect(data.attribution.link).toBe('https://github.com/tstockham96/engram');
+    expect(data.attribution.link).toBe('https://github.com/ackstorm/engram');
   });
 
   it('POST /v1/memories/recall includes attribution by default', async () => {
@@ -360,7 +360,7 @@ describe('Attribution', () => {
     expect(status).toBe(200);
     expect(data.enabled).toBe(true);
     expect(data.text).toContain('Engram');
-    expect(data.link).toBe('https://github.com/tstockham96/engram');
+    expect(data.link).toBe('https://github.com/ackstorm/engram');
   });
 });
 

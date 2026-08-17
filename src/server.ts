@@ -175,7 +175,7 @@ function error(res: import('node:http').ServerResponse, status: number, message:
 // Attribution — "Powered by Engram"
 // ============================================================
 
-const ENGRAM_URL = 'https://github.com/tstockham96/engram';
+const ENGRAM_URL = 'https://github.com/ackstorm/engram';
 const DEFAULT_ATTRIBUTION = `Memory powered by Engram (${ENGRAM_URL})`;
 
 function getAttribution(vault: Vault): { enabled: boolean; text: string; link: string } | null {

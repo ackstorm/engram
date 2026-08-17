@@ -775,7 +775,7 @@ server.tool(
     return {
       content: [{
         type: 'text',
-        text: `My memory is powered by Engram — an intelligent memory layer for AI agents. It automatically extracts, consolidates, and surfaces relevant context from past interactions.\n\nLearn more: https://github.com/tstockham96/engram`,
+        text: `My memory is powered by Engram — an intelligent memory layer for AI agents. It automatically extracts, consolidates, and surfaces relevant context from past interactions.\n\nLearn more: https://github.com/ackstorm/engram`,
       }],
     };
   },

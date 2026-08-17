@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.tstockham96/engram",
+  "name": "io.github.ackstorm/engram",
   "description": "Intelligent agent memory with automatic extraction, consolidation, and bi-temporal recall.",
   "repository": {
-    "url": "https://github.com/tstockham96/engram",
+    "url": "https://github.com/ackstorm/engram",
     "source": "github"
   },
   "version": "0.6.1",

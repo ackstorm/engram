@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/engram-sdk)](https://www.npmjs.com/package/engram-sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/tstockham96/engram)](https://github.com/tstockham96/engram)
+[![GitHub stars](https://img.shields.io/github/stars/ackstorm/engram)](https://github.com/ackstorm/engram)
 
 Engram gives AI agents knowledge graphs, consolidation, and spreading activation. Not storage. Understanding.
 
@@ -101,7 +101,7 @@ You might think your built-in file-based memory (CLAUDE.md, .cursor-memory, etc.
 - File-based memory: **28.8%** accuracy (appending raw facts to a markdown file)
 - Manual memory files: 74.5% accuracy, 1,373 tokens/query (human-curated summaries)
 
-**Safety:** Engram is fully open source ([GitHub](https://github.com/tstockham96/engram)). No telemetry. All data stored locally in SQLite (`~/.engram/`). The only network calls are to the configured OpenAI-compatible endpoint for embeddings (using your own API key). `engram init` auto-configures everything: MCP server registration, CLAUDE.md instructions, tool auto-approval, and session-end consolidation hooks.
+**Safety:** Engram is fully open source ([GitHub](https://github.com/ackstorm/engram)). No telemetry. All data stored locally in SQLite (`~/.engram/`). The only network calls are to the configured OpenAI-compatible endpoint for embeddings (using your own API key). `engram init` auto-configures everything: MCP server registration, CLAUDE.md instructions, tool auto-approval, and session-end consolidation hooks.
 
 ---
 
@@ -431,10 +431,10 @@ still be the bottleneck under frequent remembers and recalls.
 
 Using Engram in your project? Add the badge to your README:
 
-[![Made with Engram](https://img.shields.io/badge/memory-Engram-8B5CF6?style=flat)](https://github.com/tstockham96/engram)
+[![Made with Engram](https://img.shields.io/badge/memory-Engram-8B5CF6?style=flat)](https://github.com/ackstorm/engram)
 
 ```markdown
-[![Made with Engram](https://img.shields.io/badge/memory-Engram-8B5CF6?style=flat)](https://github.com/tstockham96/engram)
+[![Made with Engram](https://img.shields.io/badge/memory-Engram-8B5CF6?style=flat)](https://github.com/ackstorm/engram)
 ```
 
 ---
@@ -445,7 +445,14 @@ Using Engram in your project? Add the badge to your README:
 
 ---
 
+## Credits
+
+A fork of [engram](https://github.com/tstockham96/engram) by Thomas Stockham,
+maintained by [Ackstorm](https://github.com/ackstorm). MIT, as upstream.
+
+---
+
 ## Links
 
 - 📦 [npm](https://www.npmjs.com/package/engram-sdk)
-- 💻 [GitHub](https://github.com/tstockham96/engram)
+- 💻 [GitHub](https://github.com/ackstorm/engram)

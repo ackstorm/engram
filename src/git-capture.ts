@@ -7,7 +7,7 @@
 // from the conventional-commit type and anything below 0.2 is dropped, which
 // is the threshold consolidate() already filters on.
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { MemoryRouter } from './router.js';
 
 const SALIENCE: Record<string, number> = {
@@ -51,8 +51,8 @@ export async function captureCommit(input: string): Promise<void> {
   let subject: string;
   let changedFiles: string[];
   try {
-    subject = execSync('git log -1 --pretty=%s', opts).trim();
-    changedFiles = execSync('git diff-tree --no-commit-id --name-only -r HEAD', opts)
+    subject = execFileSync('git', ['log', '-1', '--pretty=%s'], opts).trim();
+    changedFiles = execFileSync('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], opts)
       .trim()
       .split('\n')
       .filter(Boolean);
