@@ -296,39 +296,33 @@ route('POST', '/v1/connections', async (req, res, router) => {
 
 // POST /v1/consolidate — consolidate()
 // Body: { since?: string, all?: boolean }
-// Runs against the global store only — same single-store shape REST has always
-// returned. Project-scope consolidation is reachable via the MCP server/CLI.
+// Returns one report per store, keyed by scope; a scope with no store is null.
 route('POST', '/v1/consolidate', async (req, res, router) => {
   const raw = await readBody(req).catch(() => '{}');
   const body = JSON.parse(raw || '{}');
-  const report = await router.vaultFor('global').consolidate({
-    since: body.since,
-    all: body.all,
-  });
-  json(res, 200, report);
+  const reports = await router.consolidate({ since: body.since, all: body.all });
+  json(res, 200, reports);
 });
 
-// GET /v1/entities — entities() (global store only, see /v1/consolidate note)
+// GET /v1/entities — entities() merged across stores, deduplicated by name
 route('GET', '/v1/entities', (req, res, router) => {
-  const entities = router.vaultFor('global').entities();
+  const entities = router.entities();
   json(res, 200, { entities, count: entities.length });
 });
 
-// GET /v1/stats — stats() (global store only, see /v1/consolidate note)
+// GET /v1/stats — stats() per store: { global, project? }
 route('GET', '/v1/stats', (req, res, router) => {
-  const stats = router.vaultFor('global').stats();
-  json(res, 200, stats);
+  json(res, 200, router.stats());
 });
 
-// POST /v1/export — export() (global store only, see /v1/consolidate note)
+// POST /v1/export — export() across stores; every memory carries its scope
 route('POST', '/v1/export', (req, res, router) => {
-  const data = router.vaultFor('global').export();
-  json(res, 200, data);
+  json(res, 200, router.export());
 });
 
-// POST /v1/embeddings/backfill — compute embeddings for all memories
+// POST /v1/embeddings/backfill — compute embeddings across every store
 route('POST', '/v1/embeddings/backfill', async (req, res, router) => {
-  const count = await router.vaultFor('global').backfillEmbeddings();
+  const count = await router.backfillEmbeddings();
   json(res, 200, { backfilled: count });
 });
 
@@ -373,10 +367,11 @@ route('POST', '/v1/ingest/auto', async (req, res, _router) => {
 });
 
 // POST /v1/ask — answer a question using memories as evidence (recall + LLM synthesis)
-// Global store only — see /v1/consolidate note.
+// Asks every store and returns the best-supported answer, folding the other
+// store's sources in as supporting evidence.
 route('POST', '/v1/ask', async (req, res, router) => {
   const body = JSON.parse(await readBody(req));
-  const result = await router.vaultFor('global').ask(body.question, {
+  const result = await router.ask(body.question, {
     limit: body.limit,
     spread: body.spread,
   });
@@ -396,12 +391,12 @@ route('GET', '/v1/powered-by', (req, res, router) => {
 });
 
 // GET /v1/alerts — what needs attention right now? (no context needed)
-// Global store only — see /v1/consolidate note.
+// Merged across stores, ranked by priority then age.
 route('GET', '/v1/alerts', async (req, res, router) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const staleDays = url.searchParams.get('staleDays') ? parseInt(url.searchParams.get('staleDays')!) : undefined;
   const limit = url.searchParams.get('limit') ? parseInt(url.searchParams.get('limit')!) : undefined;
-  const result = router.vaultFor('global').alerts({ staleDays, limit });
+  const result = router.alerts({ staleDays, limit });
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ alerts: result, count: result.length }));
 });

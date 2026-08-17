@@ -196,12 +196,14 @@ describe('Connections', () => {
 });
 
 describe('Consolidation', () => {
-  it('POST /v1/consolidate runs rule-based consolidation', async () => {
+  it('POST /v1/consolidate reports per scope', async () => {
     const { status, data } = await api('POST', '/v1/consolidate');
     expect(status).toBe(200);
-    expect(data.episodesProcessed).toBeDefined();
-    expect(data.startedAt).toBeDefined();
-    expect(data.completedAt).toBeDefined();
+    for (const scope of ['global', 'project']) {
+      expect(data[scope].episodesProcessed).toBeDefined();
+      expect(data[scope].startedAt).toBeDefined();
+      expect(data[scope].completedAt).toBeDefined();
+    }
   });
 });
 
@@ -214,10 +216,11 @@ describe('Entities', () => {
 });
 
 describe('Stats', () => {
-  it('GET /v1/stats returns vault statistics', async () => {
+  it('GET /v1/stats returns statistics per scope', async () => {
     const { status, data } = await api('GET', '/v1/stats');
     expect(status).toBe(200);
-    expect(data.total).toBeDefined();
+    expect(data.global.total).toBeDefined();
+    expect(data.project.total).toBeDefined();
   });
 });
 
@@ -264,6 +267,22 @@ describe('Scope', () => {
     expect(status).toBe(200);
     expect(data.moved).toBe(true);
     expect(data.from).toBe('project');
+  });
+
+  // These endpoints read the global store only until the router is wired in,
+  // which silently hides every project-scoped memory from them.
+  it('read endpoints cover the project store, not just global', async () => {
+    const marker = 'quicksilver telemetry pipeline';
+    const { status } = await api('POST', '/v1/memories', { content: marker, scope: 'project' });
+    expect(status).toBe(201);
+
+    const { data: exported } = await api('POST', '/v1/export');
+    const found = exported.memories.find((m: any) => m.content === marker);
+    expect(found).toBeDefined();
+    expect(found.scope).toBe('project');
+
+    const { data: stats } = await api('GET', '/v1/stats');
+    expect(stats.project.total).toBeGreaterThan(0);
   });
 });
 

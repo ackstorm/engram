@@ -228,12 +228,12 @@ curl "http://localhost:3800/v1/memories/m_abc123/neighbors?depth=2"
 curl -X POST http://localhost:3800/v1/consolidate
 ```
 
+Runs against every store and reports each separately.
+
 ```json
 {
-  "consolidated": 5,
-  "entitiesDiscovered": 3,
-  "contradictions": 1,
-  "connectionsFormed": 7
+  "global": { "consolidated": 5, "entitiesDiscovered": 3, "contradictions": 1, "connectionsFormed": 7 },
+  "project": { "consolidated": 2, "entitiesDiscovered": 1, "contradictions": 0, "connectionsFormed": 3 }
 }
 ```
 
@@ -260,12 +260,17 @@ Also available as `POST /v1/briefing` with JSON body.
 curl http://localhost:3800/v1/stats
 ```
 
+Reported per store. `project` is absent in single-store mode.
+
 ```json
 {
-  "total": 142,
-  "byType": { "episodic": 89, "semantic": 41, "procedural": 12 },
-  "entities": 27,
-  "edges": 63
+  "global": {
+    "total": 142,
+    "byType": { "episodic": 89, "semantic": 41, "procedural": 12 },
+    "entities": 27,
+    "edges": 63
+  },
+  "project": { "total": 38, "byType": { "episodic": 30, "semantic": 8 }, "entities": 9, "edges": 14 }
 }
 ```
 
@@ -274,6 +279,9 @@ curl http://localhost:3800/v1/stats
 ```bash
 curl http://localhost:3800/v1/entities
 ```
+
+Merged across stores and deduplicated by name, so an entity appearing in both
+is returned once with its counts summed.
 
 ```json
 {
