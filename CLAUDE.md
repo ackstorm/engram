@@ -42,3 +42,9 @@ ENGRAM_EMBEDDING_DIMS=512 npx tsx bench/locomo/run.ts <conv 0-9> <topK=10>
   numbers. Per-conv results cached in `bench/locomo/.results/` (delete to
   re-run). E2E baseline 2026-08-17, same embedder + ranking fix: **74.3%**
   (multi-hop 44.3, temporal 80.7, open-domain 65.6, single-hop 82.9).
+- Head-to-head vs upstream tstockham96/engram (same harness ported to its
+  `recall()`, identical embeddings/prompts/judge, 2026-08-17): upstream
+  scores **43.8%** e2e (multi-hop 15.6, temporal 53.9, open-domain 41.7,
+  single-hop 49.7) and recall@10 0.41-0.49 vs the fork's 0.76-0.77 on
+  conv0/1. Upstream's README ~80% claim did not reproduce under this
+  protocol. The fork improves every category and every conversation.
