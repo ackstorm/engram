@@ -39,11 +39,8 @@ import { resolveVaultPath, isSingleStoreMode, resolveProject } from './config.js
 import path from 'path';
 import { homedir } from 'os';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
-import { checkForUpdates, getVersion } from './update-check.js';
+import { getVersion } from './version.js';
 import { importObsidian, importClaudeCode } from './import.js';
-
-// Non-blocking startup checks
-checkForUpdates();
 
 // ============================================================
 // Config from environment

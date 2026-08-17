@@ -6,24 +6,5 @@
     "url": "https://github.com/ackstorm/engram",
     "source": "github"
   },
-  "version": "0.6.1",
-  "packages": [
-    {
-      "registryType": "npm",
-      "identifier": "engram-sdk",
-      "version": "0.6.1",
-      "transport": {
-        "type": "stdio"
-      },
-      "environmentVariables": [
-        {
-          "description": "API key for the OpenAI-compatible embeddings and chat endpoints",
-          "isRequired": true,
-          "format": "string",
-          "isSecret": true,
-          "name": "OPENAI_API_KEY"
-        }
-      ]
-    }
-  ]
+  "version": "0.6.1"
 }

@@ -116,7 +116,22 @@ score(await withVault(async v => {
   const out: string[][] = [];
   for (const qa of qas) {
     const hits = store.searchBM25(qa.question, topK);
-    out.push(hits.map((h: any) => dia.get(h.memoryId) ?? ''));
+    out.push(hits.map((h: any) => dia.get(h.id) ?? ''));
   }
   return out;
 }), 'E BM25 only');
+
+// F: recallScored with secondary retrievers stubbed out — isolates the
+// step-8 salience/stability multiplier + recency boost from the boosts.
+score(await withVault(async v => {
+  const store = (v as any).store;
+  store.getByEntity = () => [];
+  store.getByTopic = () => [];
+  store.getRecent = () => [];
+  const out: string[][] = [];
+  for (const qa of qas) {
+    const r = await v.recallScored({ context: qa.question, limit: topK, spread: false });
+    out.push(r.map(x => x.memory.source?.sessionId ?? ''));
+  }
+  return out;
+}), 'F no boosts, no spread');

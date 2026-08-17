@@ -2,7 +2,6 @@
 
 **Universal memory layer for AI agents**
 
-[![npm version](https://img.shields.io/npm/v/engram-sdk)](https://www.npmjs.com/package/engram-sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/ackstorm/engram)](https://github.com/ackstorm/engram)
 
@@ -29,7 +28,8 @@ Engram gives AI agents knowledge graphs, consolidation, and spreading activation
 ### MCP Setup (recommended — Claude Code / Cursor)
 
 ```bash
-npm install -g engram-sdk
+git clone https://github.com/ackstorm/engram.git
+cd engram && npm install && npm link
 engram init
 ```
 
@@ -38,7 +38,9 @@ That's it. 10 memory tools available via MCP.
 ### REST API (non-Node environments)
 
 ```bash
-npm install -g engram-sdk
+git clone https://github.com/ackstorm/engram.git
+cd engram && npm install && npm link
+
 export OPENAI_API_KEY=your-key-here
 export ENGRAM_AUTH_TOKEN=$(openssl rand -hex 32)
 export ENGRAM_LLM_MODEL=gpt-4o-mini
@@ -68,7 +70,8 @@ If you're an AI coding agent and your user asked you to install this, here is wh
 **Install:**
 
 ```bash
-npm install -g engram-sdk
+git clone https://github.com/ackstorm/engram.git
+cd engram && npm install && npm link
 engram init
 ```
 
@@ -454,5 +457,4 @@ maintained by [Ackstorm](https://github.com/ackstorm). MIT, as upstream.
 
 ## Links
 
-- 📦 [npm](https://www.npmjs.com/package/engram-sdk)
 - 💻 [GitHub](https://github.com/ackstorm/engram)

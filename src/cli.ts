@@ -2,7 +2,7 @@
 
 import { Vault } from './vault.js';
 import type { VaultConfig } from './types.js';
-import { checkForUpdates, getVersion } from './update-check.js';
+import { getVersion } from './version.js';
 import { renderTree as renderMemoryTree, animateGrowth } from './memory-tree.js';
 import path from 'path';
 import { homedir } from 'os';
@@ -1094,7 +1094,7 @@ async function main() {
   const { values, positionals } = parseCliArgs();
 
   if (values.version) {
-    console.log(`engram-sdk v${getVersion()}`);
+    console.log(`engram v${getVersion()}`);
     process.exit(0);
   }
 
@@ -1102,9 +1102,6 @@ async function main() {
     console.log(HELP);
     process.exit(0);
   }
-
-  // Non-blocking update check (prints notice to stderr if outdated)
-  checkForUpdates();
 
   const command = positionals[0];
 

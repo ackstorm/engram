@@ -8,7 +8,8 @@ Get agent memory that compounds over time. Works alongside your existing CLAUDE.
 
 ```bash
 # Install
-npm install -g engram-sdk
+git clone https://github.com/ackstorm/engram.git
+cd engram && npm install && npm link
 
 # Start the server
 ENGRAM_PORT=3800 ENGRAM_OWNER=yourname engram-serve

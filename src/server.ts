@@ -4,7 +4,7 @@ import { MemoryRouter } from './router.js';
 import { createEmbedder } from './embeddings.js';
 import type { EmbeddingProvider } from './embeddings.js';
 import type { VaultConfig } from './types.js';
-import { checkForUpdates, getVersion } from './update-check.js';
+import { getVersion } from './version.js';
 import { createServer } from 'node:http';
 import path from 'path';
 import os from 'os';
@@ -815,7 +815,6 @@ export function createEngramServer(config: ServerConfig) {
       server.listen(preferredPort, host, () => {
         const addr = server.address() as import('net').AddressInfo;
         console.log(`🧠 Engram API server listening on http://${host}:${addr.port}`);
-        checkForUpdates();
         resolve();
       });
     }),
