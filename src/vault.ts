@@ -730,6 +730,11 @@ If nothing: {"insights": []}`;
     return Math.log(1 + (total - df) / (1 + df)) / Math.log(1 + total);
   }
 
+  /** Memories in a given lifecycle status. Read-only view over the store. */
+  byStatus(status: string, limit = 50) {
+    return this.store.getByStatus(status, limit);
+  }
+
   /** Whether this vault can call an LLM at all. */
   hasLLM(): boolean {
     return Boolean(this.config.llm?.apiKey && this.config.llm?.model);
@@ -2875,12 +2880,20 @@ Be conservative with explicit memories. Be observant with implicit ones — look
         }
       }
 
-      // Mark source episodes as superseded now that knowledge has been extracted
-      for (const ep of episodes) {
-        if (ep.status === 'active' && ep.type === 'episodic') {
-          this.store.updateStatus(ep.id, 'superseded');
-        }
-      }
+      // Episodes are NOT superseded by consolidation.
+      //
+      // This loop used to mark every consolidated episode 'superseded', and
+      // because recallScored filters superseded memories out by default, one
+      // dream made the whole episodic layer unretrievable — measured on a
+      // LoCoMo vault, 419 active memories became 11 and retrieval recall@30
+      // went from 0.888 to 0.000. The dream scheduler runs on a 24h timer, so
+      // the loss was silent and automatic.
+      //
+      // Summaries are an additional granularity, not a replacement. The
+      // summary carries connective tissue across turns that no single turn
+      // holds; the turn carries detail the summary drops. Questions need both,
+      // which is also why ingesting via extraction alone measured 10 points
+      // worse than ingesting raw turns.
 
       // Upsert entities
       for (const ent of result.entities ?? []) {
