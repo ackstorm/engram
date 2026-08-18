@@ -43,6 +43,7 @@ import { homedir } from 'os';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { getVersion } from './version.js';
 import { importObsidian, importClaudeCode } from './import.js';
+import { startDreamScheduler } from './scheduler.js';
 
 // ============================================================
 // Config from environment
@@ -581,25 +582,6 @@ server.tool(
     // Include alerts in briefing so agents get them without a separate call
     const alerts = await backend.alerts({ limit: 5 });
 
-    // Auto-consolidation: if it's been 24+ hours since last consolidation,
-    // trigger one in the background. No cron needed, no permissions.
-    try {
-      const recent = await backend.recall({
-        context: 'consolidation completed',
-        topics: ['consolidation'],
-        limit: 1,
-      });
-      const lastConsolidation = recent.length > 0 ? recent[0].createdAt : null;
-      const hoursSince = lastConsolidation
-        ? (Date.now() - new Date(lastConsolidation).getTime()) / (1000 * 60 * 60)
-        : Infinity;
-      if (hoursSince >= 24) {
-        backend.consolidate().catch(() => {});
-      }
-    } catch {
-      // Best-effort — never break briefing
-    }
-
     // Build topic clusters from entities to show depth
     const entityDepth = briefing.topEntities
       .filter(e => e.memoryCount >= 2)
@@ -916,6 +898,14 @@ async function main() {
     printStoreBanner();
     if (hasEmbedder) console.error(`   Embeddings: OpenAI-compatible`);
     if (llmKey) console.error(`   LLM: OpenAI-compatible (consolidation enabled)`);
+  }
+
+  if (localRouter) {
+    startDreamScheduler({
+      consolidate: () => localRouter.consolidate(),
+      getMeta: (k) => localRouter.getMeta(k),
+      setMeta: (k, v) => localRouter.setMeta(k, v),
+    });
   }
 
   // Auto-ingest recent transcripts on startup (best-effort, non-blocking)

@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { resolveLlmModel, type MemoryScope } from './config.js';
 import { chatJson } from './llm.js';
 import { resolveCorsOrigin, corsAllowlist, requireAuthToken, checkBearerToken } from './config.js';
+import { startDreamScheduler } from './scheduler.js';
 
 const ScopeSchema = z.enum(['project', 'global']);
 
@@ -926,6 +927,15 @@ Example:
     console.log('  GET    /v1/stats              — Vault statistics');
     console.log('  POST   /v1/export             — Export vault');
     console.log('  GET    /health                — Health check');
+
+    // ponytail: dreams the default vault only. Multi-tenant `vaults: {}` mode
+    // gets per-tenant dreams when a tenant asks for one.
+    const dreamRouter = getOrCreateRouter(vaultConfig);
+    startDreamScheduler({
+      consolidate: () => dreamRouter.consolidate(),
+      getMeta: (k) => dreamRouter.getMeta(k),
+      setMeta: (k, v) => dreamRouter.setMeta(k, v),
+    });
   });
 
   // Graceful shutdown

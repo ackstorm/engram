@@ -89,6 +89,14 @@ export class MemoryRouter {
     return this.projectVault;
   }
 
+  /** Meta accessors on the global store — the scheduler's lease lives here. */
+  getMeta(key: string): string | null {
+    return (this.globalVault as any).store.getMeta(key);
+  }
+  setMeta(key: string, value: string): void {
+    (this.globalVault as any).store.setMeta(key, value);
+  }
+
   /** Every live store, paired with the scope label its rows carry. */
   private stores(): Array<{ scope: MemoryScope; vault: Vault }> {
     const list: Array<{ scope: MemoryScope; vault: Vault }> = [
