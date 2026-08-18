@@ -33,6 +33,17 @@ const MAX_TOPIC_BOOST = 0.2;
 const ALIAS_MIN_LENGTH = 3;
 
 /**
+ * Episodes per consolidation prompt. Sized to a stretch of conversation rather
+ * than a whole vault: large enough that facts mentioned apart still co-occur in
+ * one summary, small enough that the prompt stays bounded as a vault grows.
+ * ENGRAM_CONSOLIDATION_BATCH overrides it so the size can be measured.
+ */
+const CONSOLIDATION_BATCH_SIZE = (() => {
+  const raw = Number(process.env.ENGRAM_CONSOLIDATION_BATCH);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 25;
+})();
+
+/**
  * Vector share of the hybrid blend. Measured, not asserted: sweeping against
  * eval/retrieval.ts (49 memories, 25 labelled queries, text-embedding-3-small)
  * gives MRR 0.675 at 0.50, 0.771 at 0.75, 0.810 at 0.90 and 0.821 at 0.95.
@@ -1468,13 +1479,26 @@ If nothing: {"insights": []}`;
     let contradictionsFound = 0;
 
     if (this.config.llm) {
-      // LLM-powered consolidation
-      const result = await this.llmConsolidate(episodes);
-      semanticCreated = result.semanticCreated;
-      semanticUpdated = result.semanticUpdated;
-      entitiesDiscovered = result.entitiesDiscovered;
-      connectionsFormed = result.connectionsFormed;
-      contradictionsFound = result.contradictionsFound;
+      // Consolidate in batches rather than in one prompt.
+      //
+      // Every episode used to go into a single call, which does not survive
+      // contact with a real vault: 419 episodes produced one enormous prompt
+      // and came back with 10 generic facts for the whole corpus. Batching
+      // bounds the prompt, and — the reason it matters for retrieval — it
+      // yields a summary per batch instead of a handful per lifetime, so
+      // facts that co-occur within a stretch of conversation end up in one
+      // retrievable unit. That is the granularity multi-hop questions need:
+      // two facts forty turns apart are in no single turn but are in the
+      // batch summary that covers them.
+      for (let i = 0; i < episodes.length; i += CONSOLIDATION_BATCH_SIZE) {
+        const batch = episodes.slice(i, i + CONSOLIDATION_BATCH_SIZE);
+        const result = await this.llmConsolidate(batch);
+        semanticCreated += result.semanticCreated;
+        semanticUpdated += result.semanticUpdated;
+        entitiesDiscovered += result.entitiesDiscovered;
+        connectionsFormed += result.connectionsFormed;
+        contradictionsFound += result.contradictionsFound;
+      }
     } else {
       // Rule-based consolidation (no LLM required)
       const result = this.ruleBasedConsolidate(episodes);
