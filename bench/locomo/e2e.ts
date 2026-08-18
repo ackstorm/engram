@@ -20,6 +20,11 @@ const CATEGORY_NAMES: Record<number, string> = {
 
 const CHAT_URL = 'https://api.ackstorm.ai/v1/chat/completions';
 const CHAT_MODEL = process.env.ENGRAM_BENCH_LLM ?? 'gemini-flash-latest';
+// The judge is pinned separately from the answerer. Swapping the answering
+// model must not silently swap the grader too — a stricter or laxer judge
+// would move the score for a reason that has nothing to do with the system
+// under test, and every number recorded so far was graded by this default.
+const JUDGE_MODEL = process.env.ENGRAM_BENCH_JUDGE ?? 'gemini-flash-latest';
 const CHAT_KEY = process.env.LITELLM_API_KEY;
 if (!CHAT_KEY) throw new Error('LITELLM_API_KEY not set');
 
@@ -68,14 +73,14 @@ const resultsDir = path.join(import.meta.dirname, '.results');
 mkdirSync(cacheDir, { recursive: true });
 mkdirSync(resultsDir, { recursive: true });
 
-async function chat(system: string, user: string): Promise<string> {
+async function chat(system: string, user: string, model: string = CHAT_MODEL): Promise<string> {
   for (let attempt = 1; ; attempt++) {
     try {
       const res = await fetch(CHAT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CHAT_KEY}` },
         body: JSON.stringify({
-          model: CHAT_MODEL,
+          model,
           temperature: 0,
           messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
         }),
@@ -175,8 +180,10 @@ for (const convIndex of convs) {
     );
     const gold = String(qa.answer ?? '');
     const verdict = await chat(
+      // JUDGE_MODEL, not the answerer — see the constant above.
       'You grade answers to questions about a conversation. Reply with exactly one word: CORRECT if the candidate answer conveys the same information as the gold answer (paraphrase, date-format differences, and extra correct detail are all fine), or WRONG otherwise.',
       `Question: ${qa.question}\nGold answer: ${gold}\nCandidate answer: ${answer}`,
+      JUDGE_MODEL,
     );
     process.stdout.write(`\rconv${convIndex}: ${++done}/${qas.length}`);
     return { category: qa.category, question: qa.question, gold, answer, correct: /^correct/i.test(verdict) };
