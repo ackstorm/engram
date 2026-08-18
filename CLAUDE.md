@@ -65,3 +65,22 @@ ENGRAM_EMBEDDING_DIMS=512 npx tsx bench/locomo/run.ts <conv 0-9> <topK=10>
   words" to questions whose gold answer is a six-item list. Second, Mnemis's
   published 93.9 is above our answering model's ceiling, so it is not a reachable
   target here at any retrieval quality; the honest target is 74.3 -> 85.1.
+- **Context-budget ablation 2026-08-18**: at top-30 the same pipeline scores
+  **81.0%** e2e (multi-hop 60.3, temporal 84.4, open-domain 61.5, single-hop
+  88.8) against 74.3% at top-10. No ranking or architecture change — purely how
+  many snippets the answerer sees. That is 6.7 of the 10.8 points available
+  below the oracle ceiling, and 16.0 of multi-hop's 26.3. Open-domain is the one
+  category that got *worse* (65.6 -> 61.5): 20 extra snippets of loosely related
+  context appear to dilute an inference-style question rather than support it.
+- **Graph-route ablation 2026-08-18** (`graphLimit`, `bench/locomo/run.ts <conv>
+  <topK> <graphLimit>`, conv0): at an equal 30-snippet budget, 10+20 scores
+  recall 0.761 / multi-hop 0.534 against 30+0's 0.890 / 0.740 — and against the
+  10+0 baseline's 0.762 / 0.542. **The 20 reserved slots recover nothing.**
+  Spreading activation discovers essentially no evidence the primary ranking
+  missed, so the slots are better spent on more of the ranked list.
+  Mnemis's +15.3 for its graph route (System-1 RAG 73.8 -> RAG+Graph 89.1) does
+  not reproduce here, and the substrate explains why: their base graph is
+  Graphiti-extracted typed relations, while the benchmark vaults ingest with
+  rule-based extraction and no LLM, so the edge set is far too sparse to
+  traverse. `graphLimit` stays 0 by default. Re-test only against a corpus
+  ingested with LLM extraction.
