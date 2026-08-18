@@ -114,6 +114,15 @@ meeting six-item gold answers, and LoCoMo evidence labels that do not contain
 their own gold answer ("What did Melanie paint recently?" -> gold "sunset",
 oracle "Not mentioned"). Only the middle one is ours to fix.
 
+**Correction (same day): the 85.1% is not an upper bound.** It was measured
+under answer prompt v1 and against LoCoMo's evidence labels, both of which
+leak. conv0's oracle is 82.0%; conv0 at top-30 with a rewritten answer prompt
+(v2, `ENGRAM_BENCH_PROMPT=v2` in `bench/locomo/e2e.ts`) scores 84.9% — above
+its own "ceiling". Two causes: the oracle inherited the v1 prompt defect it was
+being used to diagnose, and the evidence labels omit answers that are present
+in the conversation. Treat the oracle as an attribution tool (how much failure
+survives good evidence), never as a bound on what retrieval may claim.
+
 **A free +6.7 that was not on this list: the context budget itself.**
 Same pipeline, `topK` 10 -> 30, no code change: **74.3% -> 81.0%** e2e
 (multi-hop 44.3 -> 60.3, single-hop 82.9 -> 88.8, temporal 80.7 -> 84.4). That

@@ -4,6 +4,7 @@
 // 1540 questions total — same protocol as mem0's eval.
 //
 // Usage: npx tsx bench/locomo/e2e.ts [conv|all=all] [topK=10] [graphLimit=0]
+// Env: ENGRAM_BENCH_PROMPT=v1|v2 selects the answerer prompt (default v1).
 // Env: LITELLM_API_KEY (chat via api.ackstorm.ai) + the embedding env from
 // CLAUDE.md. Per-conv results cached in .results/e2e-conv<i>.json — delete to
 // re-run a conversation. Ingestion shares .cache/ with run.ts.
@@ -32,7 +33,30 @@ const graphLimit = Number(process.argv[4] ?? 0);
 const useHierarchy = process.env.ENGRAM_BENCH_HIERARCHY === '1';
 // The cache key has to carry every knob that changes the answer, or a second
 // configuration silently reports the first one's numbers.
-const runTag = `${CHAT_MODEL}-k${topK}g${graphLimit}${useHierarchy ? '-h' : ''}`;
+// Answer-prompt variant. The oracle run showed points dying AFTER perfect
+// retrieval, partly because v1 says "a few words" to questions whose gold
+// answer is a six-item list. v1 stays the default so every previously recorded
+// number remains reproducible; the tag keeps their caches apart.
+const promptVariant = process.env.ENGRAM_BENCH_PROMPT ?? 'v1';
+const runTag = `${CHAT_MODEL}-k${topK}g${graphLimit}${useHierarchy ? '-h' : ''}${promptVariant === 'v1' ? '' : `-${promptVariant}`}`;
+
+// The JUDGE prompt is deliberately NOT variant-controlled. Relaxing the grader
+// would make numbers incomparable across commits; only the answerer may change.
+const ANSWER_SYSTEM: Record<string, (speakers: string) => string> = {
+  v1: speakers =>
+    `You answer questions about a long conversation between ${speakers}, using only the retrieved memory snippets provided. Each snippet is one dialogue turn prefixed with its session timestamp. Be concise — a few words. For date/time questions give the specific date. If the memories are insufficient, give your best guess from them.`,
+  v2: speakers =>
+    `You answer questions about a long conversation between ${speakers}, using only the retrieved memory snippets provided. Each snippet is one dialogue turn prefixed with its session timestamp.
+
+Be concise: a few words for a single fact, and no explanation or preamble.
+
+When the question asks what someone did, likes, owns, read, made, or took part in, the answer is usually a SET rather than one item. List every distinct item the memories support, separated by commas. Do not stop at the clearest one.
+
+For date/time questions give the specific date. If the memories are insufficient, give your best guess from them.`,
+};
+if (!(promptVariant in ANSWER_SYSTEM)) {
+  throw new Error(`Unknown ENGRAM_BENCH_PROMPT='${promptVariant}' (have: ${Object.keys(ANSWER_SYSTEM).join(', ')})`);
+}
 const dataset = JSON.parse(readFileSync(path.join(import.meta.dirname, 'locomo10.json'), 'utf8'));
 const convs: number[] = arg === 'all' ? dataset.map((_: unknown, i: number) => i) : [Number(arg)];
 
@@ -146,7 +170,7 @@ for (const convIndex of convs) {
     const hits = await vault.recallScored({ context: qa.question, limit: topK, graphLimit, hierarchy: useHierarchy });
     const memories = hits.map((h, i) => `${i + 1}. ${h.memory.content}`).join('\n');
     const answer = await chat(
-      `You answer questions about a long conversation between ${speakers}, using only the retrieved memory snippets provided. Each snippet is one dialogue turn prefixed with its session timestamp. Be concise — a few words. For date/time questions give the specific date. If the memories are insufficient, give your best guess from them.`,
+      ANSWER_SYSTEM[promptVariant](speakers),
       `Memories:\n${memories}\n\nQuestion: ${qa.question}\nAnswer:`,
     );
     const gold = String(qa.answer ?? '');

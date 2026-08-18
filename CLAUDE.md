@@ -56,6 +56,16 @@ ENGRAM_EMBEDDING_DIMS=512 npx tsx bench/locomo/run.ts <conv 0-9> <topK=10>
   evidence label). This bounds every retrieval change: the retrieval-attributable
   gap is oracle minus e2e, so **+10.8 overall and +26.3 on multi-hop**, not 100
   minus e2e.
+  **CAVEAT added 2026-08-18 — this is NOT an upper bound, do not treat it as
+  one.** It was measured with answer prompt v1 and with LoCoMo's own evidence
+  labels, and both leak: v1 is the "be concise" prompt whose defect this very
+  measurement exposed, and the labels are demonstrably incomplete (the oracle
+  answers "Not mentioned" to questions whose gold answer exists in the
+  conversation). A retriever pulling 30 turns can therefore surface answers the
+  labelled evidence omits. Measured: conv0's oracle is 82.0% while conv0 at
+  top-30 with answer prompt v2 scores 84.9%. Read the oracle as "accuracy from
+  labelled evidence under prompt v1" — useful for attributing failure to the
+  answer layer, useless as a hard ceiling.
   Two consequences. First, 29.4 points of multi-hop failure survive perfect
   retrieval — more than retrieval itself is worth — split across an all-or-nothing
   judge on enumerations ("Transgender" graded WRONG against "Transgender woman";
