@@ -20,6 +20,13 @@ import { buildHierarchy as buildHierarchyGraph, selectByTraversal } from './hier
 const MAX_SECONDARY_WEIGHT = 0.35;
 
 /**
+ * Ceiling for the entity boost, reached only by an entity unique to one
+ * memory. Matches the old top rung (0.25) so a rare entity is scored exactly
+ * as before; everything more common is scored lower than it used to be.
+ */
+const MAX_ENTITY_BOOST = 0.25;
+
+/**
  * Vector share of the hybrid blend. Measured, not asserted: sweeping against
  * eval/retrieval.ts (49 memories, 25 labelled queries, text-embedding-3-small)
  * gives MRR 0.675 at 0.50, 0.771 at 0.75, 0.810 at 0.90 and 0.821 at 0.95.
@@ -632,6 +639,32 @@ If nothing: {"insights": []}`;
     return count;
   }
 
+  /** Active memories carrying this entity. See entityIdfWeight. */
+  entityDocFrequency(entity: string): number {
+    return this.store.countByEntity(entity);
+  }
+
+  /**
+   * Rarity of an entity in this vault, in [0,1]: 1 for unseen or unique,
+   * approaching 0 for an entity on nearly every memory.
+   *
+   * Standard inverse document frequency, normalised by the corpus so the
+   * result is comparable across vaults of different sizes — recall merges
+   * scored results from two stores, so a raw log count would let the larger
+   * vault win on size alone.
+   */
+  entityIdfWeight(entity: string): number {
+    // Ablation escape hatch, same shape as ENGRAM_HYBRID_ALPHA: read per call
+    // so a benchmark can measure the change instead of asserting it. Set to 0
+    // to score every entity at the old top rung, which is the pre-IDF
+    // behaviour for any entity rare enough to fit under the LIMIT.
+    if (process.env.ENGRAM_ENTITY_IDF === '0') return 1;
+    const total = this.store.countActiveMemories();
+    if (total <= 1) return 1;
+    const df = Math.min(this.store.countByEntity(entity), total);
+    return Math.log(1 + (total - df) / (1 + df)) / Math.log(1 + total);
+  }
+
   /** Whether this vault can call an LLM at all. */
   hasLLM(): boolean {
     return Boolean(this.config.llm?.apiKey && this.config.llm?.model);
@@ -840,9 +873,15 @@ If nothing: {"insights": []}`;
     if (parsed.entities && parsed.entities.length > 0) {
       for (const entity of parsed.entities) {
         const memories = this.store.getByEntity(entity, 20);
+        // Weight by how rare the entity is, not by how many rows came back.
+        // The old rule stepped `memories.length` through 0.25/0.15/0.1, but
+        // getByEntity carries LIMIT 20, so the length saturates and an entity
+        // on 300 memories scored the same as one on 21. In a personal vault
+        // the owner's own name, employer and main project sit on nearly every
+        // memory; a term on most of the corpus carries almost no information,
+        // which is the same reason normaliseBm25 exists for text.
+        const baseScore = MAX_ENTITY_BOOST * this.entityIdfWeight(entity);
         for (const mem of memories) {
-          // Scale entity base score: fewer results = higher confidence each is relevant
-          const baseScore = memories.length <= 5 ? 0.25 : memories.length <= 15 ? 0.15 : 0.1;
           // Semantic memories from entity match get a bonus — they're distilled facts
           const typeBonus = mem.type === 'semantic' ? 0.1 : 0;
           this.addCandidate(candidates, mem, (baseScore + typeBonus) * secondaryScale);

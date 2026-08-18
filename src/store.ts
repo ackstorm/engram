@@ -618,6 +618,26 @@ export class MemoryStore {
     return rows.map(r => this.rowToMemory(r));
   }
 
+  /**
+   * How many active memories carry this entity. The full count, NOT the
+   * truncated `getByEntity` result — callers weighting by rarity need to tell
+   * 21 apart from 3000, and any LIMIT collapses that distinction.
+   */
+  countByEntity(entityName: string): number {
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM memories WHERE entities LIKE ? AND status = 'active'`
+    ).get(`%"${entityName}"%`) as { n: number };
+    return row?.n ?? 0;
+  }
+
+  /** Active memories in this store — the N of any IDF calculation. */
+  countActiveMemories(): number {
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM memories WHERE status = 'active'`
+    ).get() as { n: number };
+    return row?.n ?? 0;
+  }
+
   /** Get memories by topic */
   getByTopic(topic: string, limit: number = 20): Memory[] {
     const rows = this.db.prepare(
