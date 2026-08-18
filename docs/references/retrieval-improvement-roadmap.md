@@ -57,6 +57,108 @@ so numbers stay comparable across commits.
 - Pin conv0+conv1 retrieval as a cheap CI-able regression gate so the next
   scoring change can't silently undo `ceb1bd8`.
 
+## Path to 95% — reviewed 2026-08-18
+
+Requested target: 95% e2e. This section decomposes the remaining gap from
+measurements, ranks what can close it, and states plainly which part cannot be
+closed by retrieval work.
+
+### Where we actually are
+
+| configuration | e2e |
+|---|---|
+| session start (k=10, answer prompt v1) | 74.3% |
+| + context budget k=30 | 81.0% |
+| + answer prompt v2 | **82.3%** |
+
+The two product fixes landed today — interjection filtering in `src/extract.ts`
+and IDF-weighted entity boosts in `recallScored` — are NOT in that 82.3%: every
+e2e run so far used vaults carrying the entity noise. Their measured effect is
+on ranking (conv0 hit@1 0.327 -> 0.387; conv1 holdout 0.444 -> 0.519) and
+ranking moves e2e weakly once the answerer sees 30 snippets. An everything-on
+run is still owed.
+
+### What the remaining 17.7% is made of
+
+Classified over the 273 failures of the v2 run by overlap between the answer
+and the gold items:
+
+| bucket | failures | score cost | what it is |
+|---|---|---|---|
+| all gold items already in the answer | 22 | 1.4 pts | graded wrong anyway — over-listing. v2 told the model to list everything and the judge penalises supersets |
+| partial gold overlap | 74 | 4.8 pts | genuinely incomplete: some items found, others missing |
+| little or no overlap | 177 | 11.5 pts | wrong answer: evidence missed, misread, or gold label is unreachable |
+
+The middle and bottom rows are where 95% lives, and only the middle row is
+clearly ours.
+
+### The honest constraint
+
+**95% is above published state of the art.** Mnemis reports 93.9 on this
+benchmark with GPT-4.1-mini as the answerer. Our answerer is
+`gemini-flash-latest`, and the oracle run — answering from gold evidence, i.e.
+retrieval doing nothing wrong — scored **85.1%** under prompt v1. Prompt work
+lifts that some (conv0 reached 84.9% against its own 82.0% oracle), but the gap
+between ~88% and 95% is not a retrieval gap. It is the answering model, plus a
+judge that grades enumerations all-or-nothing and a dataset whose evidence
+labels sometimes omit their own gold answer.
+
+Concretely: **a credible target for retrieval work alone is 87-89%.** Reaching
+95% requires changing the answerer, and should be attempted only after the
+measurement below says how much that is worth.
+
+### Ranked by measured leverage, cheapest-to-inform first
+
+**1. Measure the answering model's contribution. Do this before anything else.**
+`ENGRAM_BENCH_LLM` already selects the answerer. Run conv0+conv1 e2e at k=30
+with a stronger model (~460 questions, not the full 1,540). If a stronger
+answerer alone moves those two conversations 5+ points, then the ceiling
+conversation is settled and every later retrieval change gets measured against
+a realistic bar. If it moves 1 point, retrieval is the whole game and 95% is
+out of reach at any retrieval quality. Either answer reshapes this list.
+Cost: ~900 chat calls. This is the single highest-information run available.
+
+**2. Answer format v3 — stop over-listing.** v2 traded under-listing for
+over-listing: 22 failures now contain every gold item and are still graded
+wrong. The instruction wants to be "list the items that directly answer the
+question; do not pad with related items", plus a hard "no preamble" (several
+failures still open with "Based on the memories, ..."). Free, one run to verify,
+and note v2 itself only reached p=0.052 over v1 — treat single-conversation
+pilots as upper bounds, conv0 predicted +4.0 and the full set delivered +1.3.
+
+**3. Multi-granularity memories (was item 1, still correct).** 74 failures with
+partial gold overlap are set questions answered from a partial set. Session
+summaries written as `semantic` memories at ingest put co-occurring facts in one
+retrievable unit. Best structural bet, and unlike the graph routes it does not
+depend on entity quality.
+
+**4. Query decomposition for multi-hop.** Multi-hop is 38% of all remaining
+failures. Split multi-part questions, retrieve per sub-query, merge pools.
+Measure on the multi-hop slice with `run.ts` before believing it.
+
+**5. Embedding sweep — still nearly free, still not done.** 512 dims was a
+choice, not a measurement. conv0/conv1 retrieval-only at 512 / 1536 / 3072.
+
+**6. Topic boosts have the same truncation bug entities had.**
+`getByTopic(topic, 10)` with `topicScore = memories.length <= 3 ? 0.2 : 0.08`
+saturates at the LIMIT exactly as the entity ladder did. One-line fix mirroring
+`entityIdfWeight`; left undone only to keep the entity change attributable.
+
+**7. Drop hub entities from the query side.** If a query extracts an entity that
+sits on 80% of memories, it contributes nothing but candidate-pool noise. Same
+IDF, other end of the pipeline.
+
+### Recorded as done, do not redo
+
+- **Interjection filtering** (`df672fd`): 40% of conv0 entity types and 19% of
+  mentions were "Wow", "Hey Mel", "Thanks". General to any `Name: text` content.
+- **IDF entity weighting** (`5c80bf0`): the old ladder read a LIMIT-20 result
+  length, so an entity on 300 memories scored the same as one on 21.
+- **Graph route** (`graphLimit`): measured at zero, see the section above. The
+  cause is now understood — conv0's vault had 419 memories, 106 entities and
+  **one edge**. There was no graph to traverse. Any future graph work must
+  first show that edges exist.
+
 ## What NOT to do
 
 - Don't chase mem0/Zep/Mnemis leaderboard numbers: they sit above our answering
