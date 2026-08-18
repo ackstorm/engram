@@ -835,7 +835,7 @@ async function main() {
 
   if (mode === 'http') {
     // Every HTTP listener is authenticated — no loopback exemption.
-    const authToken = requireAuthToken('engram-mcp --http');
+    const authToken = requireAuthToken('engram mcp --http');
     const mcpHost = process.env.ENGRAM_MCP_HOST ?? '127.0.0.1';
 
     const transport = new StreamableHTTPServerTransport({

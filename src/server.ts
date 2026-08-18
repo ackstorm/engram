@@ -845,14 +845,14 @@ export function createEngramServer(config: ServerConfig) {
 // CLI entry point
 // ============================================================
 
-if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js')) {
+export async function serveFromEnv(): Promise<void> {
   // --help flag
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     console.log(`
-engram-serve — Engram REST API server
+engram serve — Engram REST API server
 
 Usage:
-  npx engram-serve [--help]
+  engram serve [--help]
 
 Environment Variables:
   ENGRAM_PORT          Server port (default: 0 = random available port)
@@ -869,10 +869,10 @@ Environment Variables:
   ENGRAM_LLM_BASE_URL  Custom API base URL (for Groq, Cerebras, Ollama, etc.)
 
 Example:
-  ENGRAM_PORT=3800 OPENAI_API_KEY=... ENGRAM_LLM_MODEL=gpt-4o-mini npx engram-serve
+  ENGRAM_PORT=3800 OPENAI_API_KEY=... ENGRAM_LLM_MODEL=gpt-4o-mini engram serve
 
   # Use Groq:
-  ENGRAM_LLM_API_KEY=gsk_... ENGRAM_LLM_BASE_URL=https://api.groq.com ENGRAM_LLM_MODEL=llama-3.3-70b-versatile npx engram-serve
+  ENGRAM_LLM_API_KEY=gsk_... ENGRAM_LLM_BASE_URL=https://api.groq.com ENGRAM_LLM_MODEL=llama-3.3-70b-versatile engram serve
 `);
     process.exit(0);
   }
@@ -894,7 +894,7 @@ Example:
     } : {}),
   };
 
-  const authToken = requireAuthToken('engram-serve');
+  const authToken = requireAuthToken('engram serve');
 
   const srv = createEngramServer({
     port,
@@ -948,4 +948,8 @@ Example:
     await srv.close();
     process.exit(0);
   });
+}
+
+if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js')) {
+  void serveFromEnv();
 }

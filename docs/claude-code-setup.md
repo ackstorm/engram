@@ -12,7 +12,7 @@ git clone https://github.com/ackstorm/engram.git
 cd engram && npm install && npm link
 
 # Start the server
-ENGRAM_PORT=3800 ENGRAM_OWNER=yourname engram-serve
+ENGRAM_PORT=3800 ENGRAM_OWNER=yourname engram serve
 ```
 
 ### 2. Add a session hook
