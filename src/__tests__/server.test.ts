@@ -146,6 +146,21 @@ describe('Memories', () => {
     expect(status).toBe(200);
     expect(data.hard).toBe(true);
   });
+
+  it('GET /v1/memories/:id returns one memory, 404 when absent', async () => {
+    const created = await api('POST', '/v1/memories', {
+      scope: 'global',
+      content: 'fetch-by-id fixture',
+    });
+    expect(created.status).toBe(201);
+
+    const got = await api('GET', `/v1/memories/${created.data.id}`);
+    expect(got.status).toBe(200);
+    expect(got.data.content).toBe('fetch-by-id fixture');
+
+    const missing = await api('GET', '/v1/memories/ffffffff');
+    expect(missing.status).toBe(404);
+  });
 });
 
 describe('Connections', () => {

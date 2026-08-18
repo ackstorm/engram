@@ -306,6 +306,16 @@ route('DELETE', '/v1/memories/:id', (req, res, router, params) => {
   }
 });
 
+// GET /v1/memories/:id — fetch one memory (prefix-resolved), scope attached
+route('GET', '/v1/memories/:id', (req, res, router, params) => {
+  const memory = router.getById(params.id);
+  if (!memory) {
+    json(res, 404, { error: `No memory found matching ID "${params.id}"` });
+    return;
+  }
+  json(res, 200, memory);
+});
+
 // PATCH /v1/memories/:id — update a memory's fields
 route('PATCH', '/v1/memories/:id', async (req, res, router, params) => {
   const body = await readJson(req);
