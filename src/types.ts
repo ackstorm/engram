@@ -175,6 +175,10 @@ export const RecallInputSchema = z.object({
   // pre-Phase-3 behaviour exactly.
   graphLimit: z.number().int().min(0).max(100).default(0),
 
+  // Mnemis System-2 Global Selection. Requires a built hierarchy and an LLM,
+  // and costs one call per hierarchy layer per query — hence off by default.
+  hierarchy: z.boolean().default(false),
+
   // Point-in-time query: "what was true at this date?"
   // When set, includes superseded memories that were valid at this time,
   // and excludes memories that weren't yet valid.

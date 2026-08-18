@@ -27,9 +27,12 @@ const topK = Number(process.argv[3] ?? 10);
 // Reserved slice for graph-discovered memories (Vault.recallScored graphLimit).
 // 0 reproduces the pre-Phase-3 baseline exactly.
 const graphLimit = Number(process.argv[4] ?? 0);
+// Mnemis System-2. Costs an LLM call per layer per query, plus a build measured
+// in minutes, so it is opt-in even inside the benchmark.
+const useHierarchy = process.env.ENGRAM_BENCH_HIERARCHY === '1';
 // The cache key has to carry every knob that changes the answer, or a second
 // configuration silently reports the first one's numbers.
-const runTag = `${CHAT_MODEL}-k${topK}g${graphLimit}`;
+const runTag = `${CHAT_MODEL}-k${topK}g${graphLimit}${useHierarchy ? '-h' : ''}`;
 const dataset = JSON.parse(readFileSync(path.join(import.meta.dirname, 'locomo10.json'), 'utf8'));
 const convs: number[] = arg === 'all' ? dataset.map((_: unknown, i: number) => i) : [Number(arg)];
 
@@ -119,14 +122,28 @@ for (const convIndex of convs) {
   const dbPath = await ensureIngested(convIndex);
   const workPath = `${dbPath}.work`;
   copyFileSync(dbPath, workPath);
-  const vault = new Vault({ owner: `locomo-conv${convIndex}`, dbPath: workPath }, embedder);
+  const vault = new Vault({
+    owner: `locomo-conv${convIndex}`,
+    dbPath: workPath,
+    llm: useHierarchy ? {
+      apiKey: process.env.LITELLM_API_KEY!,
+      model: process.env.ENGRAM_BENCH_LLM ?? 'gemini-flash-latest',
+      baseUrl: 'https://api.ackstorm.ai',
+    } : undefined,
+  }, embedder);
+
+  if (useHierarchy) {
+    const started = Date.now();
+    const built = await vault.buildHierarchy();
+    console.log(`hierarchy: ${built.categories} categories, ${built.layers} layers, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  }
 
   const speakers = `${sample.conversation.speaker_a} and ${sample.conversation.speaker_b}`;
   const qas = sample.qa.filter((q: { category: number }) => q.category !== 5);
   let done = 0;
 
   const records = await pool(qas, 4, async (qa: any): Promise<Rec> => {
-    const hits = await vault.recallScored({ context: qa.question, limit: topK, graphLimit });
+    const hits = await vault.recallScored({ context: qa.question, limit: topK, graphLimit, hierarchy: useHierarchy });
     const memories = hits.map((h, i) => `${i + 1}. ${h.memory.content}`).join('\n');
     const answer = await chat(
       `You answer questions about a long conversation between ${speakers}, using only the retrieved memory snippets provided. Each snippet is one dialogue turn prefixed with its session timestamp. Be concise — a few words. For date/time questions give the specific date. If the memories are insufficient, give your best guess from them.`,

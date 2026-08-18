@@ -24,6 +24,9 @@ interface QA { question: string; answer?: unknown; evidence?: string[]; category
 
 const convIndex = Number(process.argv[2] ?? 0);
 const topK = Number(process.argv[3] ?? 10);
+// Mnemis System-2. Costs an LLM call per layer per query, plus a build measured
+// in minutes, so it is opt-in even inside the benchmark.
+const useHierarchy = process.env.ENGRAM_BENCH_HIERARCHY === '1';
 
 const dataset = JSON.parse(readFileSync(path.join(import.meta.dirname, 'locomo10.json'), 'utf8'));
 const sample = dataset[convIndex];
@@ -72,7 +75,21 @@ if (fresh) {
 // hit, which would pollute the cached vault across questions... across runs.
 const workPath = `${dbPath}.work`;
 copyFileSync(dbPath, workPath);
-const vault = new Vault({ owner: `locomo-conv${convIndex}`, dbPath: workPath }, embedder);
+const vault = new Vault({
+  owner: `locomo-conv${convIndex}`,
+  dbPath: workPath,
+  llm: useHierarchy ? {
+    apiKey: process.env.LITELLM_API_KEY!,
+    model: process.env.ENGRAM_BENCH_LLM ?? 'gemini-flash-latest',
+    baseUrl: 'https://api.ackstorm.ai',
+  } : undefined,
+}, embedder);
+
+if (useHierarchy) {
+  const started = Date.now();
+  const built = await vault.buildHierarchy();
+  console.log(`hierarchy: ${built.categories} categories, ${built.layers} layers, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+}
 
 const qas = (sample.qa as QA[]).filter(q => q.category !== 5 && q.evidence?.length);
 console.log(`${qas.length} questions with gold evidence (adversarial skipped)\n`);
@@ -81,7 +98,7 @@ interface Row { category: number; recall: number; hit1: number; hitK: number; rr
 const rows: Row[] = [];
 
 for (const qa of qas) {
-  const results = await vault.recallScored({ context: qa.question, limit: topK });
+  const results = await vault.recallScored({ context: qa.question, limit: topK, hierarchy: useHierarchy });
   const retrieved = results.map(r => r.memory.source?.sessionId).filter(Boolean) as string[];
   const gold = new Set(qa.evidence!.map(e => e.trim()));
   const found = retrieved.filter(id => gold.has(id));

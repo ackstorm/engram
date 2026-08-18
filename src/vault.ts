@@ -9,6 +9,7 @@ import { calculateRecencyBoost, DEFAULT_TEMPORAL_CONFIG, findContradictionCandid
 import type { TemporalConfig } from './temporal.js';
 import { resolveLlmModel } from './config.js';
 import { chatJson, withRetry } from './llm.js';
+import { buildHierarchy as buildHierarchyGraph, selectByTraversal } from './hierarchy.js';
 
 
 // ============================================================
@@ -631,6 +632,30 @@ If nothing: {"insights": []}`;
     return count;
   }
 
+  /** Whether this vault can call an LLM at all. */
+  hasLLM(): boolean {
+    return Boolean(this.config.llm?.apiKey && this.config.llm?.model);
+  }
+
+  /**
+   * (Re)build the category hierarchy over this vault's entities. Destructive
+   * and idempotent. Needs an LLM: without `config.llm` there is nothing to
+   * build with, and returning zeros is more useful than throwing.
+   */
+  async buildHierarchy(
+    opts: { maxLayers?: number; minChildren?: number } = {},
+  ): Promise<{ layers: number; categories: number }> {
+    if (!this.config.llm) return { layers: 0, categories: 0 };
+    // callLLM is (model, prompt, config) — src/vault.ts:2721. This is the same
+    // closure shape the supersession check already uses at src/vault.ts:552.
+    const chat = (prompt: string) => this.callLLM(
+      resolveLlmModel(this.config.llm!.model),
+      prompt,
+      this.config.llm!,
+    );
+    return buildHierarchyGraph(this.store, chat, opts);
+  }
+
   // --------------------------------------------------------
   // recall() — Retrieve relevant memories for a context
   // --------------------------------------------------------
@@ -884,6 +909,37 @@ If nothing: {"insights": []}`;
         minActivation: parsed.spreadMinActivation,
         entityHops: parsed.spreadEntityHops,
       });
+    }
+
+    // ── Phase 2b: Global Selection over the category hierarchy ──
+    // Mnemis's System-2. Off unless a hierarchy exists AND the caller asked
+    // for it: it costs one LLM call per layer per query. Its results are
+    // unordered, so like spreading activation they are spent as extra
+    // coverage rather than folded into the ranking — Mnemis measures this
+    // route at 87.7 alone against 89.1 for similarity+graph, and 93.3 only
+    // when the two are combined. It is a complement, never a replacement.
+    if (parsed.hierarchy && this.config.llm) {
+      try {
+        const selected = await selectByTraversal(
+          this.store,
+          parsed.context,
+          prompt => this.callLLM(
+            resolveLlmModel(this.config.llm!.model), prompt, this.config.llm!,
+          ),
+        );
+        for (const entity of selected) {
+          for (const mem of this.store.getByEntity(entity, 20)) {
+            if (!candidates.has(mem.id)) {
+              // Flat score: traversal produces no ranks to scale.
+              candidates.set(mem.id, { memory: mem, score: 0.05 });
+              graphDiscovered.add(mem.id);
+            }
+          }
+        }
+      } catch {
+        // A failed traversal degrades to similarity+graph, which is the
+        // configuration that already scores 74.3%. Never fail the recall.
+      }
     }
 
     // ── Phase 3: Filter, score, rank ───────────────────────

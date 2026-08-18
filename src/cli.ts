@@ -92,6 +92,7 @@ Usage:
   engram entities                    List known entities
   engram export                      Export entire vault as JSON
   engram consolidate                 Run memory consolidation
+  engram hierarchy                   Rebuild the category hierarchy (needs an LLM; slow)
   engram forget <id> [--hard]        Forget a memory (soft or hard delete)
   engram edit <id>                   Edit a memory in $EDITOR (YAML)
   engram search <query>              Full-text search
@@ -143,6 +144,15 @@ function createVault(values: Record<string, unknown>): Vault {
     dbPath: (values.db as string) || path.join(homedir(), '.engram', `${(values.owner as string) || 'default'}.db`),
     agentId: (values.agent as string) || undefined,
   };
+  // Without this the LLM-backed commands degrade to no-ops rather than errors.
+  const apiKey = process.env.OPENAI_API_KEY ?? process.env.ENGRAM_API_KEY;
+  if (apiKey) {
+    config.llm = {
+      apiKey,
+      model: process.env.ENGRAM_LLM_MODEL,
+      baseUrl: process.env.ENGRAM_LLM_BASE_URL,
+    };
+  }
   return new Vault(config);
 }
 
@@ -1319,6 +1329,20 @@ Engram has no limit, semantic search, and cross-project intelligence.
           }
           console.log();
         }
+        break;
+      }
+
+      case 'hierarchy': {
+        if (!vault.hasLLM()) {
+          console.error('hierarchy needs an LLM: set OPENAI_API_KEY and ENGRAM_LLM_MODEL');
+          process.exit(1);
+        }
+        const started = Date.now();
+        const out = await vault.buildHierarchy();
+        console.log(
+          `Built ${out.categories} categories across ${out.layers} layers ` +
+          `in ${((Date.now() - started) / 1000).toFixed(1)}s`
+        );
         break;
       }
 
