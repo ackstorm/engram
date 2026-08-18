@@ -35,6 +35,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { z } from 'zod';
 import { MemoryRouter } from './router.js';
 import { localBackend, type EngramBackend } from './backend.js';
+import { RemoteBackend } from './backend-remote.js';
 import { formatScopedResults } from './mcp-format.js';
 import { resolveVaultPath, isSingleStoreMode, resolveProject } from './config.js';
 import path from 'path';
@@ -61,9 +62,8 @@ const hasEmbedder = Boolean(openaiKey);
 // Embedded mode (default): open the vaults in-process.
 const IS_REMOTE = !!process.env.ENGRAM_SERVER_URL?.trim();
 const localRouter = IS_REMOTE ? null : MemoryRouter.open();
-// Task 4 replaces this throw with the real RemoteBackend.
 const backend: EngramBackend = IS_REMOTE
-  ? (() => { throw new Error('client mode arrives in Task 4'); })()
+  ? new RemoteBackend(process.env.ENGRAM_SERVER_URL!, requireAuthToken('engram client'))
   : localBackend(localRouter!);
 
 // ============================================================
