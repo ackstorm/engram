@@ -167,6 +167,13 @@ export const RecallInputSchema = z.object({
   minSalience: z.number().min(0).max(1).default(0),
   minConfidence: z.number().min(0).max(1).default(0),
   limit: z.number().int().min(1).max(100).default(40),
+  // Extra slots reserved for memories that only spreading activation found.
+  // They are APPENDED after the primary slice rather than competing for it:
+  // graph hits arrive with an activation score that is not comparable to a
+  // fused vector/BM25 score, and letting them compete measurably hurt hit@1
+  // (see the spreadWeight comment in vault.ts). 0 = off, and off is the
+  // pre-Phase-3 behaviour exactly.
+  graphLimit: z.number().int().min(0).max(100).default(0),
 
   // Point-in-time query: "what was true at this date?"
   // When set, includes superseded memories that were valid at this time,

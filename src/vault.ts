@@ -876,8 +876,9 @@ If nothing: {"insights": []}`;
     // through the memory graph. This is what makes recall feel
     // like memory instead of search.
 
+    let graphDiscovered = new Set<string>();
     if (parsed.spread && candidates.size > 0) {
-      this.spreadActivation(candidates, {
+      graphDiscovered = this.spreadActivation(candidates, {
         maxHops: parsed.spreadHops,
         decay: parsed.spreadDecay,
         minActivation: parsed.spreadMinActivation,
@@ -996,8 +997,25 @@ If nothing: {"insights": []}`;
     // 9. Sort by score and return top N
     results.sort((a, b) => b.score - a.score);
 
-    // Mark accessed (only the returned results, not traversal noise)
     const topResults = results.slice(0, parsed.limit);
+
+    // Reserved graph slice. Mnemis's ablation puts its graph route at +15.3
+    // (System-1 RAG 73.8 -> RAG+Graph 89.1) and gives it a separate budget
+    // rather than a shared ranking — activation scores and fused vector/BM25
+    // scores are not on a comparable scale, so the only honest way to spend a
+    // graph route is extra slots. Appended, never interleaved: the primary
+    // slice above is byte-identical to what graphLimit=0 returns.
+    if (parsed.graphLimit > 0) {
+      const chosen = new Set(topResults.map(r => r.memory.id));
+      for (const r of results) {
+        if (topResults.length >= parsed.limit + parsed.graphLimit) break;
+        if (chosen.has(r.memory.id) || !graphDiscovered.has(r.memory.id)) continue;
+        topResults.push(r);
+        chosen.add(r.memory.id);
+      }
+    }
+
+    // Mark accessed (only the returned results, not traversal noise)
     for (const r of topResults) {
       this.store.getMemory(r.memory.id); // Triggers access count + stability update
     }
@@ -1034,7 +1052,10 @@ If nothing: {"insights": []}`;
       minActivation: number;
       entityHops: boolean;
     },
-  ): void {
+  ): Set<string> {
+    /** IDs this traversal introduced — direct retrieval did not have them. */
+    const discovered = new Set<string>();
+
     // Current frontier: memory IDs and their activation level
     let frontier: Map<string, number> = new Map();
 
@@ -1119,6 +1140,7 @@ If nothing: {"insights": []}`;
         const spreadWeight = 0.6;
         if (!candidates.has(id)) {
           candidates.set(id, { memory, score: activation * spreadWeight });
+          discovered.add(id);
         }
         visited.add(id);
       }
@@ -1131,6 +1153,8 @@ If nothing: {"insights": []}`;
         }
       }
     }
+
+    return discovered;
   }
 
   // --------------------------------------------------------
