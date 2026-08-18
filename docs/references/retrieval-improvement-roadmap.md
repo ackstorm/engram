@@ -148,6 +148,57 @@ saturates at the LIMIT exactly as the entity ladder did. One-line fix mirroring
 sits on 80% of memories, it contributes nothing but candidate-pool noise. Same
 IDF, other end of the pipeline.
 
+### The Mnemis idea we have NOT tried: build the base graph
+
+Re-read of <https://github.com/microsoft/Mnemis> and arXiv:2602.15313 against
+our own vault contents, 2026-08-18.
+
+Mnemis has two graphs. We ported the second and skipped the first.
+
+- **Base graph** (System-1 Graph): entity nodes consolidated across mentions —
+  the paper's example is "San Francisco", "SF" and "旧金山" collapsing to one
+  node — plus typed relations between them carrying natural-language facts.
+  Built with Graphiti. Ablation: **81.6 alone, against 73.8 for plain RAG.**
+- **Hierarchical graph** (System-2 Global Selection): categories layered over
+  the base graph. Ablation: 87.7 alone, 93.3 combined, i.e. **+4.2** on top.
+
+We implemented System-2. We never built System-1's graph, and our vault shows
+what that costs:
+
+```
+conv0: 419 memories, 60 entity types, 1 edge
+  Melanie:265   Mel:58   Mell:1      <- one person, three nodes
+  Caroline:339  Caro:2               <- one person, two nodes
+  LGBTQ:24      LGBT:1
+```
+
+An entity query for "Mel" misses Melanie's 265 memories. Co-entity spreading
+activation has one real edge to walk. This is the whole explanation for the
+graph route measuring zero, and it means the hierarchy result — whatever it
+comes back as — is a measurement of categories built over fragmented nodes,
+not a test of Mnemis's design.
+
+**So the next graph work is entity resolution, not another retrieval route.**
+Two tiers:
+
+1. *Deterministic, cheap, high precision.* Case-insensitive merge; possessive
+   normalisation (landed, `c471cda`); acronym containment (LGBT/LGBTQ). Safe
+   but will not catch Mel/Melanie, which is the one that matters here.
+2. *LLM-assisted, how Mnemis actually does it.* Resolve mentions to canonical
+   nodes at ingest or in a consolidation pass, with aliases stored on the
+   entity. `MemoryStore.upsertEntity` already has an `aliases` column that
+   nothing populates. This is also the natural home for relation extraction —
+   the edges that would give spreading activation something to traverse.
+
+Gate it the same way as everything else: after resolution, count edges and
+re-run `run.ts 0 10 20`. If the edge count is still near zero, no retrieval
+route built on the graph can pay off, and the honest move is to cut the graph
+line of work rather than add a third route over it.
+
+Note the ordering error worth not repeating: the hierarchy was built because
+the paper reported +4.2 for it, without first checking whether the substrate
+it sits on existed. One SQL count would have said no.
+
 ### Recorded as done, do not redo
 
 - **Interjection filtering** (`df672fd`): 40% of conv0 entity types and 19% of
