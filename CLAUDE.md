@@ -13,6 +13,30 @@ Detailed design/constraint docs live in `./docs/references`, indexed here:
 
 ## LoCoMo benchmark
 
+### Retrieval-quality fixes, 2026-08-18 (measured on conv0 / conv1 holdout)
+
+Ranking work, all general rather than benchmark-specific. Recall is essentially
+untouched by every one of them — entity and topic signals are boosts, not
+retrievers — so read these as hit@1 / MRR changes.
+
+| change | conv0 hit@1 | conv0 MRR |
+|---|---|---|
+| baseline (k=30) | 0.327 | 0.490 |
+| interjections are not entities (`df672fd`) | 0.387 | 0.527 |
+| IDF-weighted entity boosts (`5c80bf0`) | — | — |
+| nickname resolution + topic IDF | **0.420** | **0.557** |
+
+- `df672fd`: 40% of conv0 entity types and 19% of mentions were "Wow", "Hey
+  Mel", "Thanks" — the first word after a `Speaker:` prefix. General to any
+  `Name: text` content.
+- `5c80bf0`: the entity boost read a LIMIT-20 result length, so an entity on
+  300 memories scored like one on 21. conv1 holdout hit@1 0.444 -> 0.519.
+- Nickname resolution: conv0 only (conv1 has no split), single-hop hit@1
+  0.371 -> 0.443.
+- `c471cda` (possessive titles, sentence openers) and topic IDF both measured
+  at ~zero; kept as correctness, not claimed as wins.
+
+
 `bench/locomo/` scores retrieval (`Vault.recallScored`) against LoCoMo's gold
 evidence dia_ids — recall@k / hit@1 / MRR, no answering LLM, no judge:
 
