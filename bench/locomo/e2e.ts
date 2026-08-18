@@ -3,7 +3,7 @@
 // e2e LoCoMo scores use (mem0/upstream ~80%); adversarial (cat 5) excluded,
 // 1540 questions total — same protocol as mem0's eval.
 //
-// Usage: npx tsx bench/locomo/e2e.ts [conv|all=all] [topK=10]
+// Usage: npx tsx bench/locomo/e2e.ts [conv|all=all] [topK=10] [graphLimit=0]
 // Env: LITELLM_API_KEY (chat via api.ackstorm.ai) + the embedding env from
 // CLAUDE.md. Per-conv results cached in .results/e2e-conv<i>.json — delete to
 // re-run a conversation. Ingestion shares .cache/ with run.ts.
@@ -24,6 +24,12 @@ if (!CHAT_KEY) throw new Error('LITELLM_API_KEY not set');
 
 const arg = process.argv[2] ?? 'all';
 const topK = Number(process.argv[3] ?? 10);
+// Reserved slice for graph-discovered memories (Vault.recallScored graphLimit).
+// 0 reproduces the pre-Phase-3 baseline exactly.
+const graphLimit = Number(process.argv[4] ?? 0);
+// The cache key has to carry every knob that changes the answer, or a second
+// configuration silently reports the first one's numbers.
+const runTag = `${CHAT_MODEL}-k${topK}g${graphLimit}`;
 const dataset = JSON.parse(readFileSync(path.join(import.meta.dirname, 'locomo10.json'), 'utf8'));
 const convs: number[] = arg === 'all' ? dataset.map((_: unknown, i: number) => i) : [Number(arg)];
 
@@ -106,7 +112,7 @@ async function pool<T, R>(items: T[], size: number, fn: (item: T, i: number) => 
 interface Rec { category: number; question: string; gold: string; answer: string; correct: boolean }
 
 for (const convIndex of convs) {
-  const resultPath = path.join(resultsDir, `e2e-conv${convIndex}.json`);
+  const resultPath = path.join(resultsDir, `e2e-conv${convIndex}-${runTag}.json`);
   if (existsSync(resultPath)) { console.log(`conv${convIndex}: cached result, skipping`); continue; }
 
   const sample = dataset[convIndex];
@@ -120,7 +126,7 @@ for (const convIndex of convs) {
   let done = 0;
 
   const records = await pool(qas, 4, async (qa: any): Promise<Rec> => {
-    const hits = await vault.recallScored({ context: qa.question, limit: topK });
+    const hits = await vault.recallScored({ context: qa.question, limit: topK, graphLimit });
     const memories = hits.map((h, i) => `${i + 1}. ${h.memory.content}`).join('\n');
     const answer = await chat(
       `You answer questions about a long conversation between ${speakers}, using only the retrieved memory snippets provided. Each snippet is one dialogue turn prefixed with its session timestamp. Be concise — a few words. For date/time questions give the specific date. If the memories are insufficient, give your best guess from them.`,
@@ -145,7 +151,7 @@ for (const convIndex of convs) {
 // ── Aggregate over every conversation that has results ──
 const all: Rec[] = [];
 for (const i of dataset.keys()) {
-  const p = path.join(resultsDir, `e2e-conv${i}.json`);
+  const p = path.join(resultsDir, `e2e-conv${i}-${runTag}.json`);
   if (existsSync(p)) all.push(...JSON.parse(readFileSync(p, 'utf8')));
 }
 if (all.length > 0) {
