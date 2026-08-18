@@ -199,6 +199,56 @@ Note the ordering error worth not repeating: the hierarchy was built because
 the paper reported +4.2 for it, without first checking whether the substrate
 it sits on existed. One SQL count would have said no.
 
+### The dream: two bugs fixed, one idea unresolved, one idea untried
+
+Measured 2026-08-18 by dreaming LoCoMo vaults and re-running e2e at k=30.
+
+**Fixed, and both mattered independently of any score:**
+- `78a1520` — `consolidate()` marked every summarised episode `superseded`, and
+  recall filters those out. One dream took conv0 from 418 active memories to 11
+  and retrieval recall@30 from 0.888 to **0.000**. The dream scheduler runs on
+  a 24h timer in `engram mcp` and `engram serve`, so the loss was silent and
+  automatic.
+- `3ce5b9f` — consolidation sent every episode in one prompt. On 419 episodes
+  that returned 10 generic facts for the whole corpus and would only degrade as
+  a vault grows. Batches of 25 give 107 summaries and take edges from 1 to 166.
+
+**Unresolved: summaries as extra context (`summaryLimit`, `9c15379`).**
+Reserving slots for consolidation output, plus labelling it `[summary]` in the
+answering context so the reader prefers a raw turn when one states the answer:
+
+```
+            ALL     multi-hop   temporal
+conv0      +5.2       +6.3        +8.1
+conv1      -8.7      -27.3        -3.8
+conv2       0.0       +6.5        -7.4
+```
+
+A wash overall, but the mechanism is consistent and worth keeping in mind: a
+summary connects facts stated far apart (multi-hop gains) and blurs specific
+dates (temporal loses). conv1's -27.3 is three questions on n=11. `summaryLimit`
+stays 0 by default. If revisited, make the reserve query-dependent rather than
+fixed — synthesis questions want summaries, precision questions do not.
+
+**Untried, and the more promising direction: let the dream assign value.**
+The reason "original + reasoned version" does not compound today is that the
+system has no working notion of which memories are worth keeping. Salience is
+auto-assigned by keyword heuristics and is nearly constant: on conv0, 259 of
+419 episodes (62%) sit at exactly 0.3, with the whole corpus spanning 0.2-0.7.
+Retrieval reads salience in step 8, and decay/archival read stability, but both
+are consuming a signal that barely varies — so "keep the good, drop the
+spurious" cannot happen, because nothing knows what is good.
+
+Consolidation is the natural place to fix it: the dream already reads every
+memory in batches with surrounding context, which is exactly the vantage point
+needed to mark a turn as carrying a durable fact versus being social glue, and
+it currently throws that judgement away. Concretely: have `llmConsolidate`
+return a salience revision per episode alongside its summaries, apply it, and
+let the existing decay/archival machinery act on a signal that finally
+discriminates. Then measure whether a denser vault beats a bigger one —
+crude filler pruning alone will not do it, only ~5% of conv0 is short enough to
+cut on length.
+
 ### Recorded as done, do not redo
 
 - **Interjection filtering** (`df672fd`): 40% of conv0 entity types and 19% of
