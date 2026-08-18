@@ -76,6 +76,34 @@ function hybridAlpha(): number {
  * Weights are renormalised over the retrievers that actually ran, so a vault
  * with no embedder still gets the full 0.6 ceiling from lexical search alone.
  */
+/**
+ * Read per-episode value judgements out of a consolidation reply.
+ *
+ * The prompt presents episodes one-indexed, so `episode: 1` is `episodes[0]`.
+ * Never throws and never trusts the model's range: a malformed reply yields an
+ * empty map and consolidation proceeds without rescoring, which is strictly
+ * better than corrupting salience across a whole batch.
+ */
+export function parseEpisodeValues(raw: string, count: number): Map<number, number> {
+  const out = new Map<number, number>();
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return out;
+  let parsed: unknown;
+  try { parsed = JSON.parse(match[0]); } catch { return out; }
+  const list = (parsed as { episode_values?: unknown }).episode_values;
+  if (!Array.isArray(list)) return out;
+  for (const entry of list) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { episode, salience } = entry as Record<string, unknown>;
+    if (typeof episode !== 'number' || typeof salience !== 'number') continue;
+    if (!Number.isFinite(salience)) continue;
+    const idx = episode - 1;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= count) continue;
+    out.set(idx, Math.max(0, Math.min(1, salience)));
+  }
+  return out;
+}
+
 export function fuseRetrievalScores(
   vectorSimilarity: Map<string, number>,
   bm25Normalised: Map<string, number>,
@@ -1496,6 +1524,7 @@ If nothing: {"insights": []}`;
     let entitiesDiscovered = 0;
     let connectionsFormed = 0;
     let contradictionsFound = 0;
+    let episodesRescored = 0;
 
     if (this.config.llm) {
       // Consolidate in batches rather than in one prompt.
@@ -1517,6 +1546,7 @@ If nothing: {"insights": []}`;
         entitiesDiscovered += result.entitiesDiscovered;
         connectionsFormed += result.connectionsFormed;
         contradictionsFound += result.contradictionsFound;
+        episodesRescored += result.episodesRescored;
       }
     } else {
       // Rule-based consolidation (no LLM required)
@@ -1535,6 +1565,7 @@ If nothing: {"insights": []}`;
       entitiesDiscovered,
       connectionsFormed,
       contradictionsFound,
+      episodesRescored,
       memoriesDecayed: 0,
       memoriesArchived: 0,
     };
@@ -2814,10 +2845,11 @@ Keep entities specific and topics general. Limit to 10 entities and 8 topics max
     semanticUpdated: number;
     entitiesDiscovered: number;
     connectionsFormed: number;
+    episodesRescored: number;
     contradictionsFound: number;
   }> {
     if (episodes.length === 0) {
-      return { semanticCreated: 0, semanticUpdated: 0, entitiesDiscovered: 0, connectionsFormed: 0, contradictionsFound: 0 };
+      return { semanticCreated: 0, semanticUpdated: 0, entitiesDiscovered: 0, connectionsFormed: 0, contradictionsFound: 0, episodesRescored: 0 };
     }
 
     const llmConfig = this.config.llm!;
@@ -2864,8 +2896,21 @@ Respond in this exact JSON format:
   ],
   "connections": [
     {"episode_a": 1, "episode_b": 2, "type": "supports|elaborates|causes|associated_with|reinforces", "strength": 0.0-1.0}
+  ],
+  "episode_values": [
+    {"episode": 1, "salience": 0.0-1.0}
   ]
 }
+
+5. EPISODE VALUES: score every episode above for how much durable, retrievable
+   information it carries. This is the only point in the system that reads a
+   memory alongside its neighbours, so it is the only place this judgement can
+   be made.
+   - 0.8-1.0: states a specific fact, decision, date, name, number or commitment
+   - 0.4-0.7: adds real context or detail about something that matters
+   - 0.0-0.3: social glue — greetings, thanks, reactions, agreement, filler that
+     could never answer a question on its own
+   Score every episode exactly once.
 
 Be conservative with explicit memories. Be observant with implicit ones — look for patterns across episodes, not just within a single one.`;
 
@@ -2875,6 +2920,7 @@ Be conservative with explicit memories. Be observant with implicit ones — look
 
       let semanticCreated = 0;
       let semanticUpdated = 0;
+      let episodesRescored = 0;
       let entitiesDiscovered = 0;
       let connectionsFormed = 0;
       const contradictionsFound = result.contradictions?.length ?? 0;
@@ -2938,6 +2984,18 @@ Be conservative with explicit memories. Be observant with implicit ones — look
       // which is also why ingesting via extraction alone measured 10 points
       // worse than ingesting raw turns.
 
+      // Apply the value judgements. Salience is auto-assigned at write time by
+      // keyword heuristics and barely varies — measured on a LoCoMo vault, 62%
+      // of episodes sat at exactly 0.3 — so retrieval's salience weighting and
+      // the decay/archival machinery were all reading a signal that could not
+      // discriminate. A dream is the one pass positioned to fix that.
+      const values = parseEpisodeValues(response, episodes.length);
+      for (const [idx, salience] of values) {
+        const ep = episodes[idx];
+        if (ep) this.store.updateSalience(ep.id, salience);
+      }
+      episodesRescored += values.size;
+
       // Upsert entities
       for (const ent of result.entities ?? []) {
         this.store.upsertEntity(ent.name, ent.type);
@@ -2954,12 +3012,12 @@ Be conservative with explicit memories. Be observant with implicit ones — look
         }
       }
 
-      return { semanticCreated, semanticUpdated, entitiesDiscovered, connectionsFormed, contradictionsFound };
+      return { semanticCreated, semanticUpdated, entitiesDiscovered, connectionsFormed, contradictionsFound, episodesRescored };
     } catch (err) {
       console.error('LLM consolidation failed:', err);
       // Fallback to rule-based
       const fallback = this.ruleBasedConsolidate(episodes);
-      return { ...fallback, semanticUpdated: 0, contradictionsFound: 0 };
+      return { ...fallback, semanticUpdated: 0, contradictionsFound: 0, episodesRescored: 0 };
     }
   }
 

@@ -638,6 +638,17 @@ export class MemoryStore {
     return row?.n ?? 0;
   }
 
+  /**
+   * Revise a memory's salience. Consolidation is the only pass that reads a
+   * memory in the context of its neighbours, so it is the only place a real
+   * value judgement can be made; everything else consumes salience rather
+   * than producing it.
+   */
+  updateSalience(id: string, salience: number): void {
+    const clamped = Math.max(0, Math.min(1, salience));
+    this.db.prepare('UPDATE memories SET salience = ? WHERE id = ?').run(clamped, id);
+  }
+
   /** Every entity name in the store. Used for alias resolution. */
   listEntityNames(): string[] {
     const rows = this.db.prepare('SELECT name FROM entities').all() as Array<{ name: string }>;

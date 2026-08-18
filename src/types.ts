@@ -272,6 +272,8 @@ export interface ConsolidationReport {
   entitiesDiscovered: number;
   connectionsFormed: number;
   contradictionsFound: number;
+  /** Episodes whose salience the dream revised. See parseEpisodeValues. */
+  episodesRescored: number;
   memoriesDecayed: number;
   memoriesArchived: number;
 }
