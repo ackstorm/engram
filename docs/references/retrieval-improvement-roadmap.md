@@ -64,6 +64,72 @@ so numbers stay comparable across commits.
   claim did not reproduce: 43.8% raw, 34.3% with its extraction pipeline).
 - Don't move ingestion to extraction-only. Measured: −10 points.
 
+## Measured since this was written (2026-08-18, Phase 3 dual-route work)
+
+Notes added by the session that ran `docs/superpowers/plans/2026-08-17-phase3-dual-route-retrieval.md`.
+Three of the items above now have numbers attached. Reproduce with
+`bench/locomo/run.ts <conv> <topK> <graphLimit>` and `bench/locomo/e2e.ts`.
+
+**Item 4 — spreading activation: its stated cut condition is now MET.**
+The roadmap says "if graph-discovered candidates don't move multi-hop
+recall@10, cut the complexity." They don't. `graphLimit` (`src/types.ts`,
+`recallScored` step 9) reserves N slots that are APPENDED after the primary
+slice, so graph hits never displace a ranked result. On conv0, at an equal
+30-snippet budget:
+
+```
+  10 + 0  baseline                 recall 0.762   multi-hop 0.542
+  30 + 0  more of the ranked list  recall 0.890   multi-hop 0.740
+  10 + 20 slots to the graph       recall 0.761   multi-hop 0.534
+```
+
+Twenty slots spent on spreading activation recover **nothing** — the result is
+the 10+0 baseline. The same slots spent on more of the ranked list recover 15
+points. Mnemis's +15.3 for its graph route (System-1 RAG 73.8 -> RAG+Graph
+89.1) does not reproduce here.
+
+**Caveat that matters before anyone deletes code:** this was measured over
+*rule-based* ingest. `bench/locomo/` builds its vaults with no LLM config, so
+entity extraction is regex-grade and the edge set is nearly empty — there is
+almost no graph to traverse. Item 4 and item 1 are therefore entangled: fixing
+the substrate (session summaries, LLM extraction at ingest) could make the
+route work. Cutting the mechanism now is defensible; concluding "graph
+retrieval doesn't help" is not, until something has been retrieved over a real
+graph.
+
+The System-2 hierarchy (`src/hierarchy.ts`, `categories`/`category_edges`,
+`engram hierarchy`, `hierarchy: false` on RecallInput) was built and unit-tested
+but its e2e ablation was NOT run — it stands on the same rule-based substrate
+that just measured at zero, and its LLM cost per query is the highest of
+anything in the plan. Measure it only after item 1.
+
+**Item 5 — the answer layer is confirmed as the biggest remaining lever.**
+Oracle ceiling (`bench/locomo/oracle.ts`, answers built from gold evidence
+only): **85.1%** overall, multi-hop 70.6. So 29.4 points of multi-hop failure
+survive *perfect* retrieval — more than retrieval itself is worth. Causes seen
+in the transcripts, in rough order of size: all-or-nothing judging of
+enumerations ("Transgender" graded WRONG against "Transgender woman"; five of
+six listed activities graded WRONG), the "Be concise — a few words" instruction
+meeting six-item gold answers, and LoCoMo evidence labels that do not contain
+their own gold answer ("What did Melanie paint recently?" -> gold "sunset",
+oracle "Not mentioned"). Only the middle one is ours to fix.
+
+**A free +6.7 that was not on this list: the context budget itself.**
+Same pipeline, `topK` 10 -> 30, no code change: **74.3% -> 81.0%** e2e
+(multi-hop 44.3 -> 60.3, single-hop 82.9 -> 88.8, temporal 80.7 -> 84.4). That
+captured 6.7 of the 10.8 points available below the ceiling before any of the
+architecture above was involved. Worth stating plainly because it reframes the
+rest: remaining headroom is ~4 points overall, ~10 on multi-hop, not ~20.
+Open-domain is the exception and got *worse* (65.6 -> 61.5) — 20 extra
+loosely-related snippets appear to dilute an inference-style question. Anyone
+raising `topK` further should watch that category.
+
+**Method note.** The cheap retrieval-only ablation that killed item 4 takes ~90
+seconds on conv0 and costs embeddings only. The e2e runs it should have gated
+cost ~3,100 chat calls and ~40 minutes each. Order future work by
+cost-to-inform, not by the size of the reported gain being chased — run
+`run.ts` first, always.
+
 ## Process discipline that made this work
 
 Ablate on conv0/1 → confirm on a holdout conversation → let the oracle bound
