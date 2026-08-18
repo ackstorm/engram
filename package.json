@@ -13,9 +13,7 @@
     }
   },
   "bin": {
-    "engram": "dist/cli.js",
-    "engram-serve": "dist/server.js",
-    "engram-mcp": "dist/mcp.js"
+    "engram": "dist/cli.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",

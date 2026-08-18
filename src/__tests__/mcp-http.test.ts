@@ -5,7 +5,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 // ============================================================
-// engram-mcp --http must never start unauthenticated
+// engram mcp --http must never start unauthenticated
 // ============================================================
 
 describe('MCP HTTP transport startup', () => {

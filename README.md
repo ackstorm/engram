@@ -9,7 +9,7 @@ Engram gives AI agents knowledge graphs, consolidation, and spreading activation
 
 > **Fork notice (ackstorm/engram).** This fork changes several defaults for safety:
 > `ENGRAM_AUTH_TOKEN` is now required by every HTTP listener; `ENGRAM_LLM_MODEL`
-> has no default and must be set; and `engram-mcp --http` binds `127.0.0.1`
+> has no default and must be set; and `engram mcp --http` binds `127.0.0.1`
 > instead of `0.0.0.0` with `Access-Control-Allow-Origin: *`.
 >
 > Memory also lives in **two vaults**, not one — a global store (you, across
@@ -44,7 +44,7 @@ cd engram && npm install && npm link
 export OPENAI_API_KEY=your-key-here
 export ENGRAM_AUTH_TOKEN=$(openssl rand -hex 32)
 export ENGRAM_LLM_MODEL=gpt-4o-mini
-npx engram-serve
+npx engram serve
 ```
 
 Server starts on `http://127.0.0.1:3800`.

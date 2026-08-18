@@ -82,6 +82,8 @@ Usage:
   engram import --obsidian <path>    Import an Obsidian vault (wikilinks, tags, frontmatter)
   engram mcp                         Start the MCP server (stdio transport)
   engram mcp --http                  Start the MCP server (HTTP transport, port 3801)
+  engram serve                       Start the REST API server (DB owner + scheduler)
+  engram client                      Start the MCP server proxied over a remote engram serve
   engram shadow start                Start shadow mode (server + watcher, background)
   engram shadow stop                 Stop shadow mode
   engram shadow status               Check shadow mode status and memory count
@@ -1141,6 +1143,27 @@ async function main() {
     // Delegate to the MCP server entry point
     await import('./mcp.js');
     return; // MCP server runs until killed
+  }
+
+  if (command === 'serve') {
+    // API daemon + scheduler: the sole DB owner in remote setups.
+    const { serveFromEnv } = await import('./server.js');
+    await serveFromEnv();
+    return; // runs until killed
+  }
+
+  if (command === 'client') {
+    // Thin MCP over a remote `engram serve`. No DB, no scheduler, no keys.
+    if (!process.env.ENGRAM_SERVER_URL?.trim()) {
+      console.error('engram client requires ENGRAM_SERVER_URL (e.g. https://memory.example.com)');
+      process.exit(1);
+    }
+    if (!process.env.ENGRAM_AUTH_TOKEN?.trim()) {
+      console.error('engram client requires ENGRAM_AUTH_TOKEN (the server\'s bearer token)');
+      process.exit(1);
+    }
+    await import('./mcp.js'); // IS_REMOTE picks RemoteBackend from ENGRAM_SERVER_URL
+    return;
   }
 
   if (command === 'shadow') {

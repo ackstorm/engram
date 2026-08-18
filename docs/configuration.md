@@ -6,8 +6,27 @@ Every runtime knob is an environment variable. Nothing is read from a config fil
 
 | Variable | Applies to | Notes |
 |---|---|---|
-| `ENGRAM_AUTH_TOKEN` | `engram-serve`, `engram-mcp --http` | Bearer token. Both refuse to start without it. stdio MCP does not use it. Generate with `openssl rand -hex 32`. |
+| `ENGRAM_AUTH_TOKEN` | `engram serve`, `engram mcp --http`, `engram client` | Bearer token. All refuse to start without it. stdio MCP does not use it. Generate with `openssl rand -hex 32`. |
 | `ENGRAM_LLM_MODEL` | anything that calls an LLM | No default. An unset model is a startup error rather than a guess. |
+
+## Run modes
+
+| command | what runs | DB | scheduler | needs |
+|---|---|---|---|---|
+| `engram mcp` | MCP tools, embedded vaults | local file | yes | embedding + LLM keys |
+| `engram serve` | REST API on host:port | local file | yes | `ENGRAM_AUTH_TOKEN`, embedding + LLM keys |
+| `engram client` | MCP tools proxied over REST | none | no | `ENGRAM_SERVER_URL`, `ENGRAM_AUTH_TOKEN` |
+
+Mode selection is env-driven: if `ENGRAM_SERVER_URL` is set, `engram mcp` also runs as a client — unset it to force embedded mode.
+
+`engram client` machines hold no API keys and no data: embeddings, LLM calls,
+and the dream scheduler all live behind `engram serve`. Do not point an
+embedded `engram mcp` and an `engram serve` at the same vault files as a
+steady-state setup; the dream lease makes it safe, but one DB owner is the
+intended topology.
+
+Scheduler: consolidation runs every `ENGRAM_DREAM_INTERVAL_HOURS` (default 24)
+in whichever process owns the DB, guarded by a lease in `engram_meta`.
 
 ## LLM and embeddings
 
@@ -36,10 +55,10 @@ depends on it. Point `ENGRAM_DB_PATH` at a new file and re-import instead.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `ENGRAM_HOST` | `127.0.0.1` | `engram-serve` bind address. |
-| `ENGRAM_PORT` | `0` (random) | `engram-serve` port. |
-| `ENGRAM_MCP_HOST` | `127.0.0.1` | `engram-mcp --http` bind address. |
-| `ENGRAM_MCP_PORT` | `3801` | `engram-mcp --http` port. |
+| `ENGRAM_HOST` | `127.0.0.1` | `engram serve` bind address. |
+| `ENGRAM_PORT` | `0` (random) | `engram serve` port. |
+| `ENGRAM_MCP_HOST` | `127.0.0.1` | `engram mcp --http` bind address. |
+| `ENGRAM_MCP_PORT` | `3801` | `engram mcp --http` port. |
 | `ENGRAM_CORS_ORIGIN` | empty | Comma-separated **exact** origins. Empty means no `Access-Control-Allow-Origin` header at all. `*` is honoured but disables the protection. No prefix matching: `http://localhost` does not admit `http://localhost.evil.com`. |
 
 ## Storage

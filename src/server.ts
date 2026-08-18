@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { resolveLlmModel, type MemoryScope } from './config.js';
 import { chatJson } from './llm.js';
 import { resolveCorsOrigin, corsAllowlist, requireAuthToken, checkBearerToken } from './config.js';
+import { startDreamScheduler } from './scheduler.js';
 
 const ScopeSchema = z.enum(['project', 'global']);
 
@@ -304,6 +305,16 @@ route('DELETE', '/v1/memories/:id', (req, res, router, params) => {
   } catch (err: any) {
     json(res, 400, { error: err.message });
   }
+});
+
+// GET /v1/memories/:id — fetch one memory (prefix-resolved), scope attached
+route('GET', '/v1/memories/:id', (req, res, router, params) => {
+  const memory = router.getById(params.id);
+  if (!memory) {
+    json(res, 404, { error: `No memory found matching ID "${params.id}"` });
+    return;
+  }
+  json(res, 200, memory);
 });
 
 // PATCH /v1/memories/:id — update a memory's fields
@@ -834,14 +845,14 @@ export function createEngramServer(config: ServerConfig) {
 // CLI entry point
 // ============================================================
 
-if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js')) {
+export async function serveFromEnv(): Promise<void> {
   // --help flag
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     console.log(`
-engram-serve — Engram REST API server
+engram serve — Engram REST API server
 
 Usage:
-  npx engram-serve [--help]
+  engram serve [--help]
 
 Environment Variables:
   ENGRAM_PORT          Server port (default: 0 = random available port)
@@ -858,10 +869,10 @@ Environment Variables:
   ENGRAM_LLM_BASE_URL  Custom API base URL (for Groq, Cerebras, Ollama, etc.)
 
 Example:
-  ENGRAM_PORT=3800 OPENAI_API_KEY=... ENGRAM_LLM_MODEL=gpt-4o-mini npx engram-serve
+  ENGRAM_PORT=3800 OPENAI_API_KEY=... ENGRAM_LLM_MODEL=gpt-4o-mini engram serve
 
   # Use Groq:
-  ENGRAM_LLM_API_KEY=gsk_... ENGRAM_LLM_BASE_URL=https://api.groq.com ENGRAM_LLM_MODEL=llama-3.3-70b-versatile npx engram-serve
+  ENGRAM_LLM_API_KEY=gsk_... ENGRAM_LLM_BASE_URL=https://api.groq.com ENGRAM_LLM_MODEL=llama-3.3-70b-versatile engram serve
 `);
     process.exit(0);
   }
@@ -883,7 +894,7 @@ Example:
     } : {}),
   };
 
-  const authToken = requireAuthToken('engram-serve');
+  const authToken = requireAuthToken('engram serve');
 
   const srv = createEngramServer({
     port,
@@ -916,6 +927,15 @@ Example:
     console.log('  GET    /v1/stats              — Vault statistics');
     console.log('  POST   /v1/export             — Export vault');
     console.log('  GET    /health                — Health check');
+
+    // ponytail: dreams the default vault only. Multi-tenant `vaults: {}` mode
+    // gets per-tenant dreams when a tenant asks for one.
+    const dreamRouter = getOrCreateRouter(vaultConfig);
+    startDreamScheduler({
+      consolidate: () => dreamRouter.consolidate(),
+      getMeta: (k) => dreamRouter.getMeta(k),
+      setMeta: (k, v) => dreamRouter.setMeta(k, v),
+    });
   });
 
   // Graceful shutdown
@@ -928,4 +948,8 @@ Example:
     await srv.close();
     process.exit(0);
   });
+}
+
+if (process.argv[1]?.endsWith('server.ts') || process.argv[1]?.endsWith('server.js')) {
+  void serveFromEnv();
 }

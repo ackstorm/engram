@@ -34,6 +34,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createServer as createHttpServer } from 'node:http';
 import { z } from 'zod';
 import { MemoryRouter } from './router.js';
+import { localBackend, type EngramBackend } from './backend.js';
+import { RemoteBackend } from './backend-remote.js';
 import { formatScopedResults } from './mcp-format.js';
 import { resolveVaultPath, isSingleStoreMode, resolveProject } from './config.js';
 import path from 'path';
@@ -41,6 +43,7 @@ import { homedir } from 'os';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { getVersion } from './version.js';
 import { importObsidian, importClaudeCode } from './import.js';
+import { startDreamScheduler } from './scheduler.js';
 
 // ============================================================
 // Config from environment
@@ -56,7 +59,13 @@ const hasEmbedder = Boolean(openaiKey);
 // Initialize the router — global vault + per-project vault
 // ============================================================
 
-const router = MemoryRouter.open();
+// Client mode: ENGRAM_SERVER_URL set → tools proxy to a remote `engram serve`.
+// Embedded mode (default): open the vaults in-process.
+const IS_REMOTE = !!process.env.ENGRAM_SERVER_URL?.trim();
+const localRouter = IS_REMOTE ? null : MemoryRouter.open();
+const backend: EngramBackend = IS_REMOTE
+  ? new RemoteBackend(process.env.ENGRAM_SERVER_URL!, requireAuthToken('engram client'))
+  : localBackend(localRouter!);
 
 // ============================================================
 // Auto-ingest state
@@ -126,7 +135,7 @@ server.tool(
   },
   async (args) => {
     try {
-      const memory = router.remember(args.scope, {
+      const memory = await backend.remember(args.scope, {
         content: args.content,
         type: args.type,
         entities: args.entities,
@@ -139,7 +148,7 @@ server.tool(
         ? memory.content.slice(0, 77) + '...'
         : memory.content;
 
-      const verified = router.stats();
+      const verified = await backend.stats();
       const scopeStats = memory.scope === 'global' ? verified.global : verified.project ?? verified.global;
       return {
         content: [{
@@ -178,7 +187,7 @@ server.tool(
   },
   async (args) => {
     const limit = args.limit ?? 10;
-    const memories = await router.recall({
+    const memories = await backend.recall({
       context: args.context,
       scope: args.scope,
       entities: args.entities,
@@ -204,7 +213,7 @@ server.tool(
   },
   async (args) => {
     try {
-      const result = router.forget(args.id, args.hard ?? false);
+      const result = await backend.forget(args.id, args.hard ?? false);
       if (!result.found) {
         return { content: [{ type: 'text', text: `Error: no memory found matching ID "${args.id}"` }] };
       }
@@ -230,7 +239,7 @@ server.tool(
     all: z.boolean().optional().describe('Process all unconsolidated episodes regardless of age'),
   },
   async (args: { since?: string; all?: boolean }) => {
-    const report = await router.consolidate({ since: args.since, all: args.all });
+    const report = await backend.consolidate({ since: args.since, all: args.all });
     return {
       content: [{
         type: 'text',
@@ -258,7 +267,7 @@ server.tool(
     strength: z.number().min(0).max(1).optional().describe('Connection strength 0-1'),
   },
   async (args) => {
-    const edge = router.connect(args.sourceId, args.targetId, args.type, args.strength);
+    const edge = await backend.connect(args.sourceId, args.targetId, args.type, args.strength);
     return {
       content: [{ type: 'text', text: `Connected: ${args.sourceId} —[${args.type}]→ ${args.targetId} (strength: ${edge.strength})` }],
     };
@@ -274,8 +283,8 @@ server.tool(
   'Get vault statistics — memory counts by type, entity count, etc.',
   {},
   async (args) => {
-    const stats = router.stats();
-    const entities = router.entities();
+    const stats = await backend.stats();
+    const entities = await backend.entities();
     const totalMemories = stats.global.total + (stats.project?.total ?? 0);
     let text = JSON.stringify({
       ...stats,
@@ -313,7 +322,7 @@ server.tool(
   async (args) => {
     if (!llmKey) {
       // Simple mode: just remember with auto-extraction
-      router.remember(args.scope, { content: args.text });
+      await backend.remember(args.scope, { content: args.text });
       return { content: [{ type: 'text', text: `Stored 1 memory (simple mode — set OPENAI_API_KEY for LLM extraction).` }] };
     }
 
@@ -366,7 +375,7 @@ If nothing worth remembering: {"memories": []}`;
         if (/(?:sk-|api[_-]?key|password|token|secret)[:\s=]+\S{10,}/i.test(mem.content)) continue;
         if (/AIza[a-zA-Z0-9_-]{30,}/.test(mem.content)) continue;
 
-        router.remember(args.scope, {
+        await backend.remember(args.scope, {
           content: mem.content,
           type: mem.type ?? 'episodic',
           entities: mem.entities ?? [],
@@ -380,7 +389,7 @@ If nothing worth remembering: {"memories": []}`;
 
       return { content: [{ type: 'text', text: `Extracted ${created} memories from text.` }] };
     } catch (err) {
-      const memory = router.remember(args.scope, { content: args.text });
+      const memory = await backend.remember(args.scope, { content: args.text });
       return { content: [{ type: 'text', text: `LLM error, stored 1 raw memory as fallback.` }] };
     }
   },
@@ -398,7 +407,7 @@ server.tool(
     limit: z.number().int().min(1).max(50).optional().describe('Max memories to retrieve for context (default 20)'),
   },
   async (args) => {
-    const result = await router.ask(args.question, { limit: args.limit });
+    const result = await backend.ask(args.question, { limit: args.limit });
 
     // Build source summary lines
     const sourceLines = result.sources.slice(0, 5).map((s: any, i) =>
@@ -433,7 +442,7 @@ server.tool(
     limit: z.number().int().min(1).max(20).optional().describe('Max alerts (default 10)'),
   },
   async (args) => {
-    const alerts = router.alerts({
+    const alerts = await backend.alerts({
       staleDays: args.staleDays,
       limit: args.limit,
     });
@@ -465,7 +474,7 @@ server.tool(
     maxMemories: z.number().int().min(1).max(30).optional().describe('Max memories to extract (default 15)'),
   },
   async (args) => {
-    const result = await router.checkpoint(args.scope, args.summary, {
+    const result = await backend.checkpoint(args.scope, args.summary, {
       label: args.label,
       maxMemories: args.maxMemories,
     });
@@ -496,7 +505,7 @@ server.tool(
     maxClaims: z.number().int().min(1).max(50).optional().describe('Max claims to check (default 20)'),
   },
   async (args) => {
-    const result = await router.audit(args.content, { maxClaims: args.maxClaims });
+    const result = await backend.audit(args.content, { maxClaims: args.maxClaims });
 
     if (result.discrepancies.length === 0) {
       return { content: [{ type: 'text', text: `Audited ${result.total} claims: ${result.verified} verified, 0 discrepancies. External content looks consistent with vault.` }] };
@@ -529,7 +538,7 @@ server.tool(
     seen: z.array(z.string()).optional().describe('Memory IDs already seen this session (to avoid repeats)'),
   },
   async (args) => {
-    const results = await router.surface({
+    const results = await backend.surface({
       context: args.context,
       activeEntities: args.activeEntities,
       activeTopics: args.activeTopics,
@@ -568,29 +577,10 @@ server.tool(
     context: z.string().optional().describe('Optional context to focus the briefing on'),
   },
   async (args) => {
-    const briefing = await router.briefing(args.context ?? '');
+    const briefing = await backend.briefing(args.context ?? '');
 
     // Include alerts in briefing so agents get them without a separate call
-    const alerts = router.alerts({ limit: 5 });
-
-    // Auto-consolidation: if it's been 24+ hours since last consolidation,
-    // trigger one in the background. No cron needed, no permissions.
-    try {
-      const recent = await router.recall({
-        context: 'consolidation completed',
-        topics: ['consolidation'],
-        limit: 1,
-      });
-      const lastConsolidation = recent.length > 0 ? recent[0].createdAt : null;
-      const hoursSince = lastConsolidation
-        ? (Date.now() - new Date(lastConsolidation).getTime()) / (1000 * 60 * 60)
-        : Infinity;
-      if (hoursSince >= 24) {
-        router.consolidate().catch(() => {});
-      }
-    } catch {
-      // Best-effort — never break briefing
-    }
+    const alerts = await backend.alerts({ limit: 5 });
 
     // Build topic clusters from entities to show depth
     const entityDepth = briefing.topEntities
@@ -685,7 +675,7 @@ server.tool(
   'List all tracked entities (people, projects, concepts) with memory counts.',
   {},
   async () => {
-    const entities = router.entities();
+    const entities = await backend.entities();
     if (entities.length === 0) {
       return { content: [{ type: 'text', text: 'No entities tracked yet.' }] };
     }
@@ -710,9 +700,16 @@ server.tool(
     verbose: z.boolean().optional().describe('Show detailed progress for each file'),
   },
   async (args) => {
+    if (IS_REMOTE) {
+      return {
+        content: [{ type: 'text', text: '✗ Not available in client mode — run this against the server host (engram mcp or engram serve).' }],
+        isError: true,
+      };
+    }
     try {
+      // local-only handler (IS_REMOTE guard above): raw Vault access never crosses REST
       const result = await importObsidian({
-        vault: router.vaultFor(args.scope),
+        vault: localRouter!.vaultFor(args.scope),
         vaultPath: args.vaultPath,
         dryRun: args.dryRun,
         verbose: args.verbose,
@@ -744,9 +741,16 @@ server.tool(
     verbose: z.boolean().optional().describe('Show detailed progress'),
   },
   async (args) => {
+    if (IS_REMOTE) {
+      return {
+        content: [{ type: 'text', text: '✗ Not available in client mode — run this against the server host (engram mcp or engram serve).' }],
+        isError: true,
+      };
+    }
     try {
+      // local-only handler (IS_REMOTE guard above): raw Vault access never crosses REST
       const result = await importClaudeCode({
-        vault: router.vaultFor(args.scope),
+        vault: localRouter!.vaultFor(args.scope),
         dryRun: args.dryRun,
         includeSessions: args.includeSessions,
         maxSessionsPerProject: args.maxSessionsPerProject,
@@ -792,7 +796,7 @@ server.tool(
     scope: z.enum(['project', 'global']).describe('Destination scope'),
   },
   async (args) => {
-    const result = router.move(args.id, args.scope);
+    const result = await backend.move(args.id, args.scope);
     if (!result.moved) {
       return {
         content: [{
@@ -831,7 +835,7 @@ async function main() {
 
   if (mode === 'http') {
     // Every HTTP listener is authenticated — no loopback exemption.
-    const authToken = requireAuthToken('engram-mcp --http');
+    const authToken = requireAuthToken('engram mcp --http');
     const mcpHost = process.env.ENGRAM_MCP_HOST ?? '127.0.0.1';
 
     const transport = new StreamableHTTPServerTransport({
@@ -882,7 +886,7 @@ async function main() {
     httpServer.listen(mcpPort, mcpHost, () => {
       console.error(`🧠 Engram MCP server running (HTTP, ${mcpHost}:${mcpPort})`);
       console.error(`   Endpoint: http://${mcpHost}:${mcpPort}/mcp (bearer token required)`);
-      printStoreBanner();
+      if (!IS_REMOTE) { printStoreBanner(); } else { console.error(`[engram] client mode — remote server: ${process.env.ENGRAM_SERVER_URL}`); }
       if (hasEmbedder) console.error(`   Embeddings: OpenAI-compatible`);
       if (llmKey) console.error(`   LLM: OpenAI-compatible (consolidation enabled)`);
     });
@@ -891,9 +895,17 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error(`🧠 Engram MCP server running`);
-    printStoreBanner();
+    if (!IS_REMOTE) { printStoreBanner(); } else { console.error(`[engram] client mode — remote server: ${process.env.ENGRAM_SERVER_URL}`); }
     if (hasEmbedder) console.error(`   Embeddings: OpenAI-compatible`);
     if (llmKey) console.error(`   LLM: OpenAI-compatible (consolidation enabled)`);
+  }
+
+  if (localRouter) {
+    startDreamScheduler({
+      consolidate: () => localRouter.consolidate(),
+      getMeta: (k) => localRouter.getMeta(k),
+      setMeta: (k, v) => localRouter.setMeta(k, v),
+    });
   }
 
   // Auto-ingest recent transcripts on startup (best-effort, non-blocking)
