@@ -1,7 +1,7 @@
 // LoCoMo retrieval-only benchmark: recall@k / MRR of Vault.recallScored
 // against the gold evidence dia_ids. No answering LLM, no judge.
 //
-// Usage: npx tsx bench/locomo/run.ts [convIndex=0] [topK=10]
+// Usage: npx tsx bench/locomo/run.ts [convIndex=0] [topK=10] [graphLimit=0]
 // Needs OPENAI_API_KEY for embeddings.
 // The ingested vault is cached in bench/locomo/.cache/conv<i>.db — delete it
 // to re-ingest (embedding config is immutable per vault).
@@ -24,6 +24,8 @@ interface QA { question: string; answer?: unknown; evidence?: string[]; category
 
 const convIndex = Number(process.argv[2] ?? 0);
 const topK = Number(process.argv[3] ?? 10);
+// Extra slots reserved for spreading-activation discoveries; 0 = off.
+const graphLimit = Number(process.argv[4] ?? 0);
 // Mnemis System-2. Costs an LLM call per layer per query, plus a build measured
 // in minutes, so it is opt-in even inside the benchmark.
 const useHierarchy = process.env.ENGRAM_BENCH_HIERARCHY === '1';
@@ -98,7 +100,7 @@ interface Row { category: number; recall: number; hit1: number; hitK: number; rr
 const rows: Row[] = [];
 
 for (const qa of qas) {
-  const results = await vault.recallScored({ context: qa.question, limit: topK, hierarchy: useHierarchy });
+  const results = await vault.recallScored({ context: qa.question, limit: topK, graphLimit, hierarchy: useHierarchy });
   const retrieved = results.map(r => r.memory.source?.sessionId).filter(Boolean) as string[];
   const gold = new Set(qa.evidence!.map(e => e.trim()));
   const found = retrieved.filter(id => gold.has(id));
@@ -118,8 +120,8 @@ function report(label: string, subset: Row[]) {
   const avg = (f: (r: Row) => number) => (subset.reduce((s, r) => s + f(r), 0) / subset.length).toFixed(3);
   console.log(
     `${label.padEnd(18)} n=${String(subset.length).padEnd(4)} ` +
-    `recall@${topK}=${avg(r => r.recall)}  hit@1=${avg(r => r.hit1)}  ` +
-    `hit@${topK}=${avg(r => r.hitK)}  MRR=${avg(r => r.rr)}`
+    `recall@${topK + graphLimit}=${avg(r => r.recall)}  hit@1=${avg(r => r.hit1)}  ` +
+    `hit@${topK + graphLimit}=${avg(r => r.hitK)}  MRR=${avg(r => r.rr)}`
   );
 }
 
