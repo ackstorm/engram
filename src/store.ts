@@ -162,6 +162,21 @@ export class MemoryStore {
         importance REAL NOT NULL DEFAULT 0.5
       );
 
+      CREATE TABLE IF NOT EXISTS categories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        tags TEXT NOT NULL DEFAULT '[]',
+        layer INTEGER NOT NULL,
+        built_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS category_edges (
+        parent_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+        child_id  TEXT NOT NULL,
+        child_kind TEXT NOT NULL CHECK(child_kind IN ('category', 'entity')),
+        PRIMARY KEY (parent_id, child_id)
+      );
+
       -- Indices for fast retrieval
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
       CREATE INDEX IF NOT EXISTS idx_memories_salience ON memories(salience DESC);
@@ -172,6 +187,8 @@ export class MemoryStore {
       CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
       CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
       CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+      CREATE INDEX IF NOT EXISTS idx_category_layer ON categories(layer);
+      CREATE INDEX IF NOT EXISTS idx_category_edges_parent ON category_edges(parent_id);
     `);
 
     // Bi-temporal columns migration (added in 0.3.4)
@@ -808,6 +825,52 @@ export class MemoryStore {
       'SELECT * FROM entities ORDER BY importance DESC, memory_count DESC'
     ).all() as unknown as EntityRow[];
     return rows.map(r => this.rowToEntity(r));
+  }
+
+  getAllEntityNames(): string[] {
+    const rows = this.db.prepare('SELECT DISTINCT name FROM entities ORDER BY name').all() as Array<{ name: string }>;
+    return rows.map(r => r.name);
+  }
+
+  // --------------------------------------------------------
+  // Category hierarchy
+  // --------------------------------------------------------
+
+  insertCategory(row: { id: string; name: string; tags: string[]; layer: number }): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO categories (id, name, tags, layer) VALUES (?, ?, ?, ?)'
+    ).run(row.id, row.name, JSON.stringify(row.tags), row.layer);
+  }
+
+  linkCategoryChild(parentId: string, childId: string, childKind: 'category' | 'entity'): void {
+    this.db.prepare(
+      'INSERT OR IGNORE INTO category_edges (parent_id, child_id, child_kind) VALUES (?, ?, ?)'
+    ).run(parentId, childId, childKind);
+  }
+
+  getCategoriesByLayer(layer: number): Array<{ id: string; name: string; tags: string[]; layer: number }> {
+    const rows = this.db.prepare(
+      'SELECT id, name, tags, layer FROM categories WHERE layer = ? ORDER BY name'
+    ).all(layer) as Array<{ id: string; name: string; tags: string; layer: number }>;
+    return rows.map(r => ({ id: r.id, name: r.name, tags: JSON.parse(r.tags), layer: r.layer }));
+  }
+
+  getCategoryChildren(parentIds: string[]): Array<{ parentId: string; childId: string; childKind: 'category' | 'entity' }> {
+    if (parentIds.length === 0) return [];
+    const placeholders = parentIds.map(() => '?').join(',');
+    const rows = this.db.prepare(
+      `SELECT parent_id, child_id, child_kind FROM category_edges WHERE parent_id IN (${placeholders})`
+    ).all(...parentIds) as Array<{ parent_id: string; child_id: string; child_kind: 'category' | 'entity' }>;
+    return rows.map(r => ({ parentId: r.parent_id, childId: r.child_id, childKind: r.child_kind }));
+  }
+
+  getMaxCategoryLayer(): number {
+    const row = this.db.prepare('SELECT MAX(layer) AS m FROM categories').get() as { m: number | null };
+    return row?.m ?? 0;
+  }
+
+  clearCategories(): void {
+    this.db.exec('DELETE FROM category_edges; DELETE FROM categories;');
   }
 
   // --------------------------------------------------------

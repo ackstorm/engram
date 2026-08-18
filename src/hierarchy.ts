@@ -1,0 +1,148 @@
+// ============================================================
+// Hierarchical category graph (Mnemis System-2, build side)
+// ============================================================
+//
+// Layer 0 is the existing `entities` table — no LLM call. Each layer above is
+// produced by one prompt over the layer below. The constraints in the prompt
+// are load-bearing, quoted from the Mnemis appendix (arXiv:2602.15313):
+//
+//   - nodes are referred to BY INDEX, never by name, or the model rewrites
+//     them and mapping back becomes guesswork;
+//   - "The category name MUST NOT include the word 'and' as a connector" —
+//     forces atomic categories, so "Food and Drinks" becomes two;
+//   - tags: "maximum 3 words, maximum 5 descriptors";
+//   - many-to-many: a node may belong to several categories, which is what
+//     lets retrieval reach it from different angles;
+//   - "There must be NO leftover or ungrouped nodes";
+//   - "'user' and any first-person references ('I','me') MUST be categorized
+//     into one category called 'Speaker'".
+//
+// Compression: "each category must contain at least n child nodes" and "each
+// upper layer must contain no more nodes than the layer beneath it". Building
+// stops the moment either is violated — an uncompressed layer is a rename, not
+// an abstraction, and it costs a traversal round at query time forever after.
+//
+// Cost is the dominant constraint here, not correctness. Mnemis reports
+// 1.39e7 prompt tokens and 3,873s to build this for LoCoMo. On a laptop-local
+// tool that is a rebuild you schedule, never something on the write path.
+
+import { randomUUID } from 'crypto';
+import type { MemoryStore } from './store.js';
+
+const BUILD_PROMPT = (nodes: string[]) => `You are organising a memory graph into semantic categories.
+
+Below is a numbered list of nodes. Group them into categories.
+
+RULES — all mandatory:
+- Refer to nodes ONLY by their number. Never rewrite a node's text.
+- A category name MUST NOT contain the word "and" as a connector. Split it into
+  two categories instead.
+- Give each category at most 5 tags, each at most 3 words.
+- A node MAY belong to more than one category.
+- There must be NO leftover or ungrouped nodes: every number appears at least once.
+- Any node that is "user", "I", or "me" MUST go into a single category named "Speaker".
+- Categories must be specific enough to stay informative. Prefer "Pottery" over "Activities".
+
+NODES:
+${nodes.map((n, i) => `${i}. ${n}`).join('\n')}
+
+Respond as JSON only:
+{"categories": [{"name": "...", "tags": ["..."], "children": [0, 3, 7]}]}`;
+
+interface ParsedCategory { name: string; tags: string[]; children: number[] }
+
+/** Extract the first JSON object and validate it into categories. Never throws. */
+function parseCategories(raw: string, nodeCount: number): ParsedCategory[] {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return [];
+  let parsed: unknown;
+  try { parsed = JSON.parse(match[0]); } catch { return []; }
+  const list = (parsed as { categories?: unknown }).categories;
+  if (!Array.isArray(list)) return [];
+
+  const out: ParsedCategory[] = [];
+  for (const entry of list) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { name, tags, children } = entry as Record<string, unknown>;
+    if (typeof name !== 'string' || !name.trim()) continue;
+    // The "and" rule is enforced here, not just asked for: a model that
+    // ignores it would otherwise poison every layer above.
+    if (/\band\b/i.test(name)) continue;
+    if (!Array.isArray(children)) continue;
+    const kids = children
+      .filter((c): c is number => Number.isInteger(c) && c >= 0 && c < nodeCount);
+    if (kids.length === 0) continue;
+    const tagList = Array.isArray(tags)
+      ? tags.filter((t): t is string => typeof t === 'string')
+          .slice(0, 5)
+          .map(t => t.trim().split(/\s+/).slice(0, 3).join(' '))
+      : [];
+    out.push({ name: name.trim(), tags: tagList, children: [...new Set(kids)] });
+  }
+  return out;
+}
+
+/**
+ * Build the category layers over the vault's entities, bottom-up.
+ *
+ * Destructive and idempotent: clears any existing hierarchy first, because a
+ * partial rebuild would leave edges pointing at categories from a previous
+ * corpus. Mnemis does the same, and says so — "we periodically rebuild the
+ * hierarchical graph for simplicity".
+ *
+ * Never throws. A failed or unparseable layer stops the build and leaves
+ * whatever layers already succeeded, because a shorter hierarchy is usable and
+ * a thrown error loses the ones that worked.
+ */
+export async function buildHierarchy(
+  store: MemoryStore,
+  chat: (prompt: string) => Promise<string>,
+  opts: { maxLayers?: number; minChildren?: number } = {},
+): Promise<{ layers: number; categories: number }> {
+  const maxLayers = opts.maxLayers ?? 3;
+  const minChildren = opts.minChildren ?? 2;
+
+  store.clearCategories();
+
+  // Layer 0: entity names, free.
+  let below: Array<{ id: string; label: string }> =
+    store.getAllEntityNames().map(name => ({ id: name, label: name }));
+  let belowKind: 'entity' | 'category' = 'entity';
+  let layers = 0;
+  let categories = 0;
+
+  for (let layer = 1; layer <= maxLayers; layer++) {
+    if (below.length < 2) break;
+
+    let raw: string;
+    try {
+      raw = await chat(BUILD_PROMPT(below.map(n => n.label)));
+    } catch {
+      break;
+    }
+
+    const parsed = parseCategories(raw, below.length)
+      .filter(c => c.children.length >= minChildren);
+
+    // Compression constraint: an upper layer must be strictly smaller than the
+    // one below, or it is a rename rather than an abstraction.
+    if (parsed.length === 0 || parsed.length >= below.length) break;
+
+    const created: Array<{ id: string; label: string }> = [];
+    for (const cat of parsed) {
+      const id = randomUUID();
+      store.insertCategory({ id, name: cat.name, tags: cat.tags, layer });
+      for (const idx of cat.children) {
+        store.linkCategoryChild(id, below[idx].id, belowKind);
+      }
+      created.push({ id, label: `${cat.name} [${cat.tags.join(', ')}]` });
+      categories++;
+    }
+
+    layers = layer;
+    below = created;
+    belowKind = 'category';
+  }
+
+  return { layers, categories };
+}
