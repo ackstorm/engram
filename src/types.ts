@@ -174,6 +174,12 @@ export const RecallInputSchema = z.object({
   // (see the spreadWeight comment in vault.ts). 0 = off, and off is the
   // pre-Phase-3 behaviour exactly.
   graphLimit: z.number().int().min(0).max(100).default(0),
+  // Slots reserved for consolidation output (semantic memories whose source is
+  // a dream). They are APPENDED after the primary slice and excluded from it,
+  // because a summary competing with the turn it was derived from wins on the
+  // semantic type bonus and costs the answer its evidence. 0 = off, which is
+  // the behaviour before summaries had a reserve.
+  summaryLimit: z.number().int().min(0).max(100).default(0),
 
   // Mnemis System-2 Global Selection. Requires a built hierarchy and an LLM,
   // and costs one call per hierarchy layer per query — hence off by default.

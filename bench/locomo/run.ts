@@ -26,6 +26,7 @@ const convIndex = Number(process.argv[2] ?? 0);
 const topK = Number(process.argv[3] ?? 10);
 // Extra slots reserved for spreading-activation discoveries; 0 = off.
 const graphLimit = Number(process.argv[4] ?? 0);
+const summaryLimit = Number(process.env.ENGRAM_BENCH_SUMMARY ?? 0);
 // Mnemis System-2. Costs an LLM call per layer per query, plus a build measured
 // in minutes, so it is opt-in even inside the benchmark.
 const useHierarchy = process.env.ENGRAM_BENCH_HIERARCHY === '1';
@@ -100,7 +101,7 @@ interface Row { category: number; recall: number; hit1: number; hitK: number; rr
 const rows: Row[] = [];
 
 for (const qa of qas) {
-  const results = await vault.recallScored({ context: qa.question, limit: topK, graphLimit, hierarchy: useHierarchy });
+  const results = await vault.recallScored({ context: qa.question, limit: topK, graphLimit, summaryLimit, hierarchy: useHierarchy });
   const retrieved = results.map(r => r.memory.source?.sessionId).filter(Boolean) as string[];
   const gold = new Set(qa.evidence!.map(e => e.trim()));
   const found = retrieved.filter(id => gold.has(id));

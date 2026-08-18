@@ -33,6 +33,9 @@ const topK = Number(process.argv[3] ?? 10);
 // Reserved slice for graph-discovered memories (Vault.recallScored graphLimit).
 // 0 reproduces the pre-Phase-3 baseline exactly.
 const graphLimit = Number(process.argv[4] ?? 0);
+// Slots reserved for dream summaries; they are appended, never displacing the
+// episodic slice. 0 = off.
+const summaryLimit = Number(process.env.ENGRAM_BENCH_SUMMARY ?? 0);
 // Mnemis System-2. Costs an LLM call per layer per query, plus a build measured
 // in minutes, so it is opt-in even inside the benchmark.
 const useHierarchy = process.env.ENGRAM_BENCH_HIERARCHY === '1';
@@ -43,19 +46,35 @@ const useHierarchy = process.env.ENGRAM_BENCH_HIERARCHY === '1';
 // answer is a six-item list. v1 stays the default so every previously recorded
 // number remains reproducible; the tag keeps their caches apart.
 const promptVariant = process.env.ENGRAM_BENCH_PROMPT ?? 'v1';
-const runTag = `${CHAT_MODEL}-k${topK}g${graphLimit}${useHierarchy ? '-h' : ''}${promptVariant === 'v1' ? '' : `-${promptVariant}`}`;
+const runTag = `${CHAT_MODEL}-k${topK}g${graphLimit}${useHierarchy ? '-h' : ''}${promptVariant === 'v1' ? '' : `-${promptVariant}`}${summaryLimit > 0 ? `-s${summaryLimit}` : ''}`;
 
 // The JUDGE prompt is deliberately NOT variant-controlled. Relaxing the grader
 // would make numbers incomparable across commits; only the answerer may change.
 const ANSWER_SYSTEM: Record<string, (speakers: string) => string> = {
   v1: speakers =>
     `You answer questions about a long conversation between ${speakers}, using only the retrieved memory snippets provided. Each snippet is one dialogue turn prefixed with its session timestamp. Be concise — a few words. For date/time questions give the specific date. If the memories are insufficient, give your best guess from them.`,
+
   v2: speakers =>
     `You answer questions about a long conversation between ${speakers}, using only the retrieved memory snippets provided. Each snippet is one dialogue turn prefixed with its session timestamp.
 
 Be concise: a few words for a single fact, and no explanation or preamble.
 
 When the question asks what someone did, likes, owns, read, made, or took part in, the answer is usually a SET rather than one item. List every distinct item the memories support, separated by commas. Do not stop at the clearest one.
+
+For date/time questions give the specific date. If the memories are insufficient, give your best guess from them.`,
+
+  // v2 plus provenance. Consolidation summaries and raw turns are different
+  // kinds of evidence and were previously indistinguishable in the context,
+  // so the answerer sometimes trusted a synthesis over the turn that stated
+  // the fact: multi-hop gained 6.3 points while temporal lost 5.4.
+  v3: speakers =>
+    `You answer questions about a long conversation between ${speakers}, using only the retrieved memory snippets provided. Most snippets are one dialogue turn prefixed with its session timestamp. Snippets marked [summary] are derived from several turns.
+
+Be concise: a few words for a single fact, and no explanation or preamble.
+
+When the question asks what someone did, likes, owns, read, made, or took part in, the answer is usually a SET rather than one item. List every distinct item the memories support, separated by commas. Do not stop at the clearest one.
+
+Use [summary] snippets to connect facts stated far apart, but prefer an unmarked turn whenever one states the answer directly — the turn is the record of what was said, the summary is an interpretation of it.
 
 For date/time questions give the specific date. If the memories are insufficient, give your best guess from them.`,
 };
@@ -172,8 +191,17 @@ for (const convIndex of convs) {
   let done = 0;
 
   const records = await pool(qas, 4, async (qa: any): Promise<Rec> => {
-    const hits = await vault.recallScored({ context: qa.question, limit: topK, graphLimit, hierarchy: useHierarchy });
-    const memories = hits.map((h, i) => `${i + 1}. ${h.memory.content}`).join('\n');
+    const hits = await vault.recallScored({ context: qa.question, limit: topK, graphLimit, summaryLimit, hierarchy: useHierarchy });
+    // Label derived memories. A consolidation summary and a raw dialogue turn
+    // are different kinds of evidence — the summary connects facts stated far
+    // apart, the turn is the record of what was actually said — and an
+    // answerer that cannot tell them apart will trust a synthesis over the
+    // source. Measured: with summaries unlabelled, multi-hop rose 6.3 points
+    // but temporal fell 5.4 and single-hop 2.9.
+    const memories = hits.map((h, i) => {
+      const derived = h.memory.type === 'semantic' && h.memory.source?.type === 'consolidation';
+      return `${i + 1}. ${derived ? '[summary, derived from several turns] ' : ''}${h.memory.content}`;
+    }).join('\n');
     const answer = await chat(
       ANSWER_SYSTEM[promptVariant](speakers),
       `Memories:\n${memories}\n\nQuestion: ${qa.question}\nAnswer:`,

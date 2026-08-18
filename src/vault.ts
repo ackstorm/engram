@@ -1182,7 +1182,16 @@ If nothing: {"insights": []}`;
     // 9. Sort by score and return top N
     results.sort((a, b) => b.score - a.score);
 
-    const topResults = results.slice(0, parsed.limit);
+    // Consolidation output is additional granularity, not a substitute for the
+    // evidence it summarises. With a reserve set, summaries are held out of the
+    // primary slice and appended after it; without one they compete normally,
+    // which is the pre-reserve behaviour.
+    const isSummary = (m: Memory) =>
+      m.type === 'semantic' && m.source?.type === 'consolidation';
+    const primaryPool = parsed.summaryLimit > 0
+      ? results.filter(r => !isSummary(r.memory))
+      : results;
+    const topResults = primaryPool.slice(0, parsed.limit);
 
     // Reserved graph slice. Mnemis's ablation puts its graph route at +15.3
     // (System-1 RAG 73.8 -> RAG+Graph 89.1) and gives it a separate budget
@@ -1195,6 +1204,16 @@ If nothing: {"insights": []}`;
       for (const r of results) {
         if (topResults.length >= parsed.limit + parsed.graphLimit) break;
         if (chosen.has(r.memory.id) || !graphDiscovered.has(r.memory.id)) continue;
+        topResults.push(r);
+        chosen.add(r.memory.id);
+      }
+    }
+
+    if (parsed.summaryLimit > 0) {
+      const chosen = new Set(topResults.map(r => r.memory.id));
+      for (const r of results) {
+        if (!isSummary(r.memory) || chosen.has(r.memory.id)) continue;
+        if (topResults.filter(x => isSummary(x.memory)).length >= parsed.summaryLimit) break;
         topResults.push(r);
         chosen.add(r.memory.id);
       }
