@@ -38,6 +38,32 @@ const STOP_WORDS = new Set([
   'going', 'come', 'came', 'see', 'look', 'say', 'said', 'tell',
 ]);
 
+// Conversational interjections and discourse markers.
+//
+// Kept separate from STOP_WORDS because these are specifically the words that
+// OPEN an utterance, and the entity extractor is blind to them by design: it
+// does not treat ':' as a sentence boundary (label prefixes like "Correction:"
+// depend on that), so in "[date] Caroline: Hey Mel! ..." the first word after
+// the speaker prefix was promoted to a proper noun.
+//
+// Measured on the LoCoMo conv0 vault before this list existed: 42 of 106
+// entity types (40%) and 259 of 1364 entity mentions (19%) were interjections
+// — "Wow" outranked every real entity except the two speakers and the months.
+// Everything reading the entity graph inherited that noise: entity retrieval
+// boosts, co-entity spreading activation, and category hierarchies.
+const INTERJECTIONS = new Set([
+  'hey', 'hi', 'hello', 'yo', 'hiya', 'bye', 'goodbye', 'cheers',
+  'wow', 'whoa', 'oh', 'ah', 'aw', 'aww', 'ugh', 'hmm', 'huh', 'oops', 'yikes',
+  'yeah', 'yep', 'yes', 'nope', 'nah', 'ok', 'okay', 'sure', 'right', 'fine',
+  'thanks', 'thank', 'congrats', 'congratulations', 'welcome', 'please', 'sorry',
+  'absolutely', 'definitely', 'totally', 'exactly', 'agreed', 'indeed', 'certainly',
+  'awesome', 'amazing', 'great', 'cool', 'nice', 'good', 'perfect', 'lovely',
+  'glad', 'happy', 'love', 'omg', 'lol', 'haha', 'hah', 'yay', 'woohoo',
+  'gonna', 'wanna', 'gotta', 'btw', 'fyi', 'imo', 'tbh', 'idk',
+  'well', 'so', 'anyway', 'anyways', 'actually', 'basically', 'honestly',
+  'check', 'listen', 'look', 'see', 'hope', 'wait', 'sounds',
+]);
+
 // Topic keyword patterns
 const TOPIC_PATTERNS: Record<string, RegExp> = {
   'fitness': /\b(running|marathon|training|exercise|workout|gym|race|miles?|pace)\b/i,
@@ -98,13 +124,26 @@ function extractEntities(text: string): string[] {
     // Skip common words that happen to be capitalized
     if (STOP_WORDS.has(candidate.toLowerCase())) continue;
     if (candidate.length < 2) continue;
+
+    // Strip leading interjections. "Hey Mel" is a greeting plus a name, not a
+    // two-word proper noun — keep the name, drop the greeting. A candidate
+    // that is nothing but interjections ("Wow", "Thanks Congrats") is dropped
+    // entirely. This runs before the length/label checks below so the
+    // remainder is judged on its own merits.
+    let tokens = candidate.split(/\s+/);
+    while (tokens.length > 0 && INTERJECTIONS.has(tokens[0].toLowerCase())) {
+      tokens = tokens.slice(1);
+    }
+    if (tokens.length === 0) continue;
+    const trimmed = tokens.join(' ');
+    if (trimmed.length < 2) continue;
     // Skip label prefixes commonly used in structured text
     if (['Correction', 'Shipped', 'Decision', 'Bug', 'Fix', 'Note', 'Todo',
          'Updated', 'Added', 'Removed', 'Changed', 'Status', 'Version',
          'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-        ].includes(candidate)) continue;
+        ].includes(trimmed)) continue;
 
-    entities.add(candidate);
+    entities.add(trimmed);
   }
 
   // 2. All-caps acronyms (API, SDK, LLM, etc.)
