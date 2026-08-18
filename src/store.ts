@@ -377,6 +377,19 @@ export class MemoryStore {
     return this.embeddingDimensions;
   }
 
+  /** Read a value from engram_meta, or null. */
+  getMeta(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM engram_meta WHERE key = ?')
+      .get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  /** Upsert a value into engram_meta. */
+  setMeta(key: string, value: string): void {
+    this.db.prepare('INSERT OR REPLACE INTO engram_meta (key, value) VALUES (?, ?)')
+      .run(key, value);
+  }
+
   // --------------------------------------------------------
   // Memory CRUD
   // --------------------------------------------------------
