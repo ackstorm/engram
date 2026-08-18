@@ -48,3 +48,19 @@ ENGRAM_EMBEDDING_DIMS=512 npx tsx bench/locomo/run.ts <conv 0-9> <topK=10>
   single-hop 49.7) and recall@10 0.41-0.49 vs the fork's 0.76-0.77 on
   conv0/1. Upstream's README ~80% claim did not reproduce under this
   protocol. The fork improves every category and every conversation.
+- **Oracle ceiling 2026-08-18** (`bench/locomo/oracle.ts`, answers built from the
+  gold evidence turns only, gemini-flash-latest, answer+judge prompts copied
+  verbatim from `e2e.ts`): **85.1%** overall (multi-hop 70.6, temporal 86.6,
+  open-domain 69.6, single-hop 91.1; n=1536 — 4 open-domain questions carry no
+  evidence label). This bounds every retrieval change: the retrieval-attributable
+  gap is oracle minus e2e, so **+10.8 overall and +26.3 on multi-hop**, not 100
+  minus e2e.
+  Two consequences. First, 29.4 points of multi-hop failure survive perfect
+  retrieval — more than retrieval itself is worth — split across an all-or-nothing
+  judge on enumerations ("Transgender" graded WRONG against "Transgender woman";
+  5 of 6 listed activities graded WRONG), LoCoMo evidence labels that do not
+  contain the gold answer ("What did Melanie paint recently?" → gold "sunset",
+  oracle "Not mentioned"), and an answer prompt that says "Be concise — a few
+  words" to questions whose gold answer is a six-item list. Second, Mnemis's
+  published 93.9 is above our answering model's ceiling, so it is not a reachable
+  target here at any retrieval quality; the honest target is 74.3 -> 85.1.
