@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MemoryStore } from '../store.js';
-import { buildHierarchy } from '../hierarchy.js';
+import { buildHierarchy, selectByTraversal } from '../hierarchy.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -92,5 +92,62 @@ describe('buildHierarchy', () => {
     const chat = async () => 'I am afraid I cannot do that';
     const out = await buildHierarchy(store, chat, { maxLayers: 2, minChildren: 1 });
     expect(out).toEqual({ layers: 0, categories: 0 });
+  });
+});
+
+describe('selectByTraversal', () => {
+  let store: MemoryStore;
+  let dbPath: string;
+
+  beforeEach(() => {
+    dbPath = path.join(os.tmpdir(), `engram-traverse-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    store = new MemoryStore(dbPath);
+    // Layer 1: two categories over four entities.
+    store.insertCategory({ id: 'c-hobbies', name: 'Hobbies', tags: ['leisure'], layer: 1 });
+    store.insertCategory({ id: 'c-places', name: 'Places', tags: ['geography'], layer: 1 });
+    store.linkCategoryChild('c-hobbies', 'pottery', 'entity');
+    store.linkCategoryChild('c-hobbies', 'camping', 'entity');
+    store.linkCategoryChild('c-places', 'Sweden', 'entity');
+    store.linkCategoryChild('c-places', 'Boston', 'entity');
+  });
+
+  afterEach(() => {
+    store.close();
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.unlinkSync(dbPath + suffix); } catch {}
+    }
+  });
+
+  it('returns the entities under the categories the model selects', async () => {
+    const chat = async () => JSON.stringify({ selected: [{ name: 'Hobbies', get_all_children: false }] });
+    expect((await selectByTraversal(store, 'what does she do for fun', chat)).sort())
+      .toEqual(['camping', 'pottery']);
+  });
+
+  it('takes every descendant when get_all_children is set', async () => {
+    const chat = async () => JSON.stringify({ selected: [{ name: 'Places', get_all_children: true }] });
+    expect((await selectByTraversal(store, 'where has she been', chat)).sort())
+      .toEqual(['Boston', 'Sweden']);
+  });
+
+  it('returns nothing when the model selects nothing', async () => {
+    const chat = async () => JSON.stringify({ selected: [] });
+    expect(await selectByTraversal(store, 'unrelated', chat)).toEqual([]);
+  });
+
+  it('returns nothing, without throwing, when there is no hierarchy', async () => {
+    store.clearCategories();
+    const chat = async () => JSON.stringify({ selected: [{ name: 'Hobbies', get_all_children: true }] });
+    expect(await selectByTraversal(store, 'anything', chat)).toEqual([]);
+  });
+
+  it('survives unparseable model output', async () => {
+    const chat = async () => 'sorry, no';
+    expect(await selectByTraversal(store, 'anything', chat)).toEqual([]);
+  });
+
+  it('ignores names the model invents', async () => {
+    const chat = async () => JSON.stringify({ selected: [{ name: 'Nonexistent', get_all_children: true }] });
+    expect(await selectByTraversal(store, 'anything', chat)).toEqual([]);
   });
 });

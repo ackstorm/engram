@@ -146,3 +146,126 @@ export async function buildHierarchy(
 
   return { layers, categories };
 }
+
+// The selection prompt is Mnemis's NODE_SELECTION_PROMPT_TEMPLATE, adapted to
+// select by name rather than by uuid — uuids waste tokens and the model has no
+// use for them when names within a layer are unique. Its released selector
+// defaults use_tag=True and use_summary=False, so tags are shown and summaries
+// are not. Note the deliberately permissive wording: this route exists to widen
+// coverage, and a strict selector would just reproduce the vector search.
+const SELECTION_PROMPT = (query: string, nodes: Array<{ name: string; tags: string[] }>) =>
+  `You are analyzing a hierarchical knowledge graph to help answer a user query.
+
+Select all nodes that could help answer the query. A node is helpful if it:
+- Directly relates to the query;
+- Covers a clearly relevant topic, concept, or category;
+- Provides useful background or context;
+- Contains user-specific information (e.g. interests, goals, constraints);
+- Likely has sub-nodes that may be helpful.
+
+Do not be overly strict: include nodes that might provide context or
+personalization, even if they seem partially redundant.
+
+Set "get_all_children" to true only if you are confident ALL of a node's
+sub-nodes are helpful.
+
+QUERY: ${query}
+
+NODES:
+${nodes.map(n => `- ${n.name} [${n.tags.join(', ')}]`).join('\n')}
+
+Respond as JSON only:
+{"selected": [{"name": "...", "get_all_children": false}]}`;
+
+/** Parse the selector's reply into names. Never throws. */
+function parseSelection(raw: string): Array<{ name: string; all: boolean }> {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return [];
+  let parsed: unknown;
+  try { parsed = JSON.parse(match[0]); } catch { return []; }
+  const list = (parsed as { selected?: unknown }).selected;
+  if (!Array.isArray(list)) return [];
+  const out: Array<{ name: string; all: boolean }> = [];
+  for (const entry of list) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { name, get_all_children } = entry as Record<string, unknown>;
+    if (typeof name !== 'string' || !name.trim()) continue;
+    out.push({ name: name.trim(), all: get_all_children === true });
+  }
+  return out;
+}
+
+/** Every entity reachable beneath these categories, following edges downward. */
+function allDescendantEntities(store: MemoryStore, rootIds: string[]): string[] {
+  const entities = new Set<string>();
+  let frontier = rootIds;
+  const seen = new Set(rootIds);
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    for (const edge of store.getCategoryChildren(frontier)) {
+      if (edge.childKind === 'entity') { entities.add(edge.childId); continue; }
+      if (seen.has(edge.childId)) continue;
+      seen.add(edge.childId);
+      next.push(edge.childId);
+    }
+    frontier = next;
+  }
+  return [...entities];
+}
+
+/**
+ * Mnemis's System-2 Global Selection: descend the hierarchy from the top,
+ * asking the model at each layer which categories are relevant, and collect
+ * the entities underneath.
+ *
+ * Results are UNORDERED. Mnemis says so explicitly, and it is why traversal
+ * output cannot join a reciprocal-rank fusion — there are no ranks to fuse.
+ * Callers must spend it as extra coverage, the way `graphLimit` does.
+ *
+ * Never throws: an empty array means "this route contributed nothing", which
+ * is a valid outcome on a vault with no hierarchy built.
+ */
+export async function selectByTraversal(
+  store: MemoryStore,
+  query: string,
+  chat: (prompt: string) => Promise<string>,
+): Promise<string[]> {
+  const top = store.getMaxCategoryLayer();
+  if (top < 1) return [];
+
+  const entities = new Set<string>();
+  let current = store.getCategoriesByLayer(top);
+
+  for (let layer = top; layer >= 1 && current.length > 0; layer--) {
+    let raw: string;
+    try {
+      raw = await chat(SELECTION_PROMPT(query, current));
+    } catch {
+      break;
+    }
+
+    const byName = new Map(current.map(c => [c.name.toLowerCase(), c]));
+    const shortcut: string[] = [];
+    const descend: string[] = [];
+    for (const sel of parseSelection(raw)) {
+      const cat = byName.get(sel.name.toLowerCase());
+      if (!cat) continue;                       // the model invented a name
+      (sel.all ? shortcut : descend).push(cat.id);
+    }
+
+    // The shortcut: "set true only if you're confident all its sub-nodes are
+    // helpful" — take the whole subtree without spending a call per layer.
+    for (const e of allDescendantEntities(store, shortcut)) entities.add(e);
+
+    if (descend.length === 0) break;
+
+    const children = store.getCategoryChildren(descend);
+    for (const edge of children) {
+      if (edge.childKind === 'entity') entities.add(edge.childId);
+    }
+    const nextIds = new Set(children.filter(c => c.childKind === 'category').map(c => c.childId));
+    current = store.getCategoriesByLayer(layer - 1).filter(c => nextIds.has(c.id));
+  }
+
+  return [...entities];
+}
