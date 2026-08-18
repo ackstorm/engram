@@ -886,7 +886,7 @@ async function main() {
     httpServer.listen(mcpPort, mcpHost, () => {
       console.error(`🧠 Engram MCP server running (HTTP, ${mcpHost}:${mcpPort})`);
       console.error(`   Endpoint: http://${mcpHost}:${mcpPort}/mcp (bearer token required)`);
-      printStoreBanner();
+      if (!IS_REMOTE) { printStoreBanner(); } else { console.error(`[engram] client mode — remote server: ${process.env.ENGRAM_SERVER_URL}`); }
       if (hasEmbedder) console.error(`   Embeddings: OpenAI-compatible`);
       if (llmKey) console.error(`   LLM: OpenAI-compatible (consolidation enabled)`);
     });
@@ -895,7 +895,7 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error(`🧠 Engram MCP server running`);
-    printStoreBanner();
+    if (!IS_REMOTE) { printStoreBanner(); } else { console.error(`[engram] client mode — remote server: ${process.env.ENGRAM_SERVER_URL}`); }
     if (hasEmbedder) console.error(`   Embeddings: OpenAI-compatible`);
     if (llmKey) console.error(`   LLM: OpenAI-compatible (consolidation enabled)`);
   }

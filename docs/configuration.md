@@ -17,6 +17,8 @@ Every runtime knob is an environment variable. Nothing is read from a config fil
 | `engram serve` | REST API on host:port | local file | yes | `ENGRAM_AUTH_TOKEN`, embedding + LLM keys |
 | `engram client` | MCP tools proxied over REST | none | no | `ENGRAM_SERVER_URL`, `ENGRAM_AUTH_TOKEN` |
 
+Mode selection is env-driven: if `ENGRAM_SERVER_URL` is set, `engram mcp` also runs as a client — unset it to force embedded mode.
+
 `engram client` machines hold no API keys and no data: embeddings, LLM calls,
 and the dream scheduler all live behind `engram serve`. Do not point an
 embedded `engram mcp` and an `engram serve` at the same vault files as a
