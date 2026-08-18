@@ -26,6 +26,12 @@ const MAX_SECONDARY_WEIGHT = 0.35;
  */
 const MAX_ENTITY_BOOST = 0.25;
 
+/** Ceiling for the topic boost, reached only by a topic unique to one memory. */
+const MAX_TOPIC_BOOST = 0.2;
+
+/** Shortest string treated as a nickname. Two-letter fragments over-merge. */
+const ALIAS_MIN_LENGTH = 3;
+
 /**
  * Vector share of the hybrid blend. Measured, not asserted: sweeping against
  * eval/retrieval.ts (49 memories, 25 labelled queries, text-embedding-3-small)
@@ -639,6 +645,37 @@ If nothing: {"insights": []}`;
     return count;
   }
 
+  /**
+   * Surface forms of the same entity: the name itself plus every stored entity
+   * that is a strict case-insensitive prefix of it, or that it is a prefix of.
+   *
+   * Rule-based extraction writes each surface form as its own entity, so one
+   * person ends up as several nodes — measured on a LoCoMo vault, "Melanie"
+   * 265, "Mel" 58, "Mell" 1 — and a query mentioning the full name never
+   * reaches the memories filed under the nickname. Mnemis solves this in its
+   * base graph by resolving mentions to canonical nodes; this is the cheap
+   * deterministic slice of that.
+   *
+   * Deliberately conservative: single-token forms only, both at least three
+   * characters, strict prefix. It catches nicknames ("Mel"/"Melanie") and
+   * acronym extensions ("LGBT"/"LGBTQ") without inventing semantic links. It
+   * will occasionally over-merge ("Art"/"Arthur"); that is the accepted cost
+   * of not needing an LLM on the read path.
+   */
+  resolveEntityAliases(entity: string): string[] {
+    const probe = entity.trim();
+    if (probe.length < ALIAS_MIN_LENGTH || /\s/.test(probe)) return [probe];
+    const lower = probe.toLowerCase();
+    const out = new Set<string>([probe]);
+    for (const name of this.store.listEntityNames()) {
+      if (name.length < ALIAS_MIN_LENGTH || /\s/.test(name)) continue;
+      const other = name.toLowerCase();
+      if (other === lower) { out.add(name); continue; }
+      if (other.startsWith(lower) || lower.startsWith(other)) out.add(name);
+    }
+    return [...out];
+  }
+
   /** Active memories carrying this entity. See entityIdfWeight. */
   entityDocFrequency(entity: string): number {
     return this.store.countByEntity(entity);
@@ -653,6 +690,15 @@ If nothing: {"insights": []}`;
    * scored results from two stores, so a raw log count would let the larger
    * vault win on size alone.
    */
+  /** Shared IDF curve, so entity and merged-alias weights stay on one scale. */
+  idfFromCounts(df: number): number {
+    if (process.env.ENGRAM_ENTITY_IDF === '0') return 1;
+    const total = this.store.countActiveMemories();
+    if (total <= 1) return 1;
+    const capped = Math.min(df, total);
+    return Math.log(1 + (total - capped) / (1 + capped)) / Math.log(1 + total);
+  }
+
   entityIdfWeight(entity: string): number {
     // Ablation escape hatch, same shape as ENGRAM_HYBRID_ALPHA: read per call
     // so a benchmark can measure the change instead of asserting it. Set to 0
@@ -662,6 +708,25 @@ If nothing: {"insights": []}`;
     const total = this.store.countActiveMemories();
     if (total <= 1) return 1;
     const df = Math.min(this.store.countByEntity(entity), total);
+    return Math.log(1 + (total - df) / (1 + df)) / Math.log(1 + total);
+  }
+
+  /** Active memories carrying this topic. See topicIdfWeight. */
+  topicDocFrequency(topic: string): number {
+    return this.store.countByTopic(topic);
+  }
+
+  /**
+   * Rarity of a topic in this vault, in [0,1]. Same reasoning as
+   * entityIdfWeight: topics come from a fixed auto-assigned pattern list, so
+   * a handful ('preferences', 'people') land on a large share of any real
+   * vault and carry almost no discriminating information.
+   */
+  topicIdfWeight(topic: string): number {
+    if (process.env.ENGRAM_ENTITY_IDF === '0') return 1;
+    const total = this.store.countActiveMemories();
+    if (total <= 1) return 1;
+    const df = Math.min(this.store.countByTopic(topic), total);
     return Math.log(1 + (total - df) / (1 + df)) / Math.log(1 + total);
   }
 
@@ -872,7 +937,10 @@ If nothing: {"insights": []}`;
     // than raw episodic entries.
     if (parsed.entities && parsed.entities.length > 0) {
       for (const entity of parsed.entities) {
-        const memories = this.store.getByEntity(entity, 20);
+        // Pull every surface form of the entity, not just the spelling the
+        // query happened to use — see resolveEntityAliases.
+        const surfaceForms = this.resolveEntityAliases(entity);
+        const memories = surfaceForms.flatMap(form => this.store.getByEntity(form, 20));
         // Weight by how rare the entity is, not by how many rows came back.
         // The old rule stepped `memories.length` through 0.25/0.15/0.1, but
         // getByEntity carries LIMIT 20, so the length saturates and an entity
@@ -880,7 +948,10 @@ If nothing: {"insights": []}`;
         // the owner's own name, employer and main project sit on nearly every
         // memory; a term on most of the corpus carries almost no information,
         // which is the same reason normaliseBm25 exists for text.
-        const baseScore = MAX_ENTITY_BOOST * this.entityIdfWeight(entity);
+        // Rarity of the merged entity: a nickname that looks rare on its own
+        // is not rare once its longer form is counted with it.
+        const mergedDf = surfaceForms.reduce((n, f) => n + this.store.countByEntity(f), 0);
+        const baseScore = MAX_ENTITY_BOOST * this.idfFromCounts(mergedDf);
         for (const mem of memories) {
           // Semantic memories from entity match get a bonus — they're distilled facts
           const typeBonus = mem.type === 'semantic' ? 0.1 : 0;
@@ -893,7 +964,10 @@ If nothing: {"insights": []}`;
     if (parsed.topics && parsed.topics.length > 0) {
       for (const topic of parsed.topics) {
         const memories = this.store.getByTopic(topic, 10);
-        const topicScore = memories.length <= 3 ? 0.2 : 0.08;
+        // Weighted by rarity, not by a LIMIT-10 result length — same defect
+        // the entity ladder had, and topics are auto-assigned from a fixed
+        // pattern list so the common ones are very common.
+        const topicScore = MAX_TOPIC_BOOST * this.topicIdfWeight(topic);
         for (const mem of memories) {
           this.addCandidate(candidates, mem, topicScore * secondaryScale);
         }

@@ -638,6 +638,20 @@ export class MemoryStore {
     return row?.n ?? 0;
   }
 
+  /** Every entity name in the store. Used for alias resolution. */
+  listEntityNames(): string[] {
+    const rows = this.db.prepare('SELECT name FROM entities').all() as Array<{ name: string }>;
+    return rows.map(r => r.name);
+  }
+
+  /** How many active memories carry this topic. The full count, not a LIMIT. */
+  countByTopic(topic: string): number {
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM memories WHERE topics LIKE ? AND status = 'active'`
+    ).get(`%"${topic}"%`) as { n: number };
+    return row?.n ?? 0;
+  }
+
   /** Get memories by topic */
   getByTopic(topic: string, limit: number = 20): Memory[] {
     const rows = this.db.prepare(
