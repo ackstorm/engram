@@ -51,6 +51,18 @@ const STOP_WORDS = new Set([
 // — "Wow" outranked every real entity except the two speakers and the months.
 // Everything reading the entity graph inherited that noise: entity retrieval
 // boosts, co-entity spreading activation, and category hierarchies.
+const LEADING_NOISE = new Set([
+  // Words that are capitalised only because they open an utterance. Gerunds
+  // and subordinating conjunctions are the two shapes seen most in the LoCoMo
+  // vaults ("Seeing Mel", "Since July", "Realizing", "Lately"); without this
+  // they fuse onto the following proper noun and fragment that entity.
+  'since', 'seeing', 'looking', 'looks', 'realizing', 'realising', 'marrying',
+  'researching', 'finding', 'lately', 'recently', 'meanwhile', 'besides',
+  'though', 'although', 'unless', 'whenever', 'wherever', 'having', 'being',
+  'getting', 'going', 'coming', 'making', 'taking', 'giving', 'trying',
+  'speaking', 'talking', 'thinking', 'feeling', 'hoping', 'wondering',
+]);
+
 const INTERJECTIONS = new Set([
   'hey', 'hi', 'hello', 'yo', 'hiya', 'bye', 'goodbye', 'cheers',
   'wow', 'whoa', 'oh', 'ah', 'aw', 'aww', 'ugh', 'hmm', 'huh', 'oops', 'yikes',
@@ -109,7 +121,10 @@ function extractEntities(text: string): string[] {
 
   // 1. Capitalized words/phrases (likely proper nouns)
   //    Match sequences of capitalized words, including camelCase/PascalCase compounds
-  const capitalizedPattern = /\b([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\b/g;
+  // `'s` is part of the run so that "Charlotte's Web" survives as one entity.
+  // A trailing possessive with no capitalised word after it ("Melanie's son")
+  // is stripped below — that is a reference to the entity, not a new one.
+  const capitalizedPattern = /\b([A-Z][a-zA-Z]+(?:'s)?(?:\s+[A-Z][a-zA-Z]+(?:'s)?)*)\b/g;
   let match;
   while ((match = capitalizedPattern.exec(text)) !== null) {
     const candidate = match[1];
@@ -131,10 +146,15 @@ function extractEntities(text: string): string[] {
     // entirely. This runs before the length/label checks below so the
     // remainder is judged on its own merits.
     let tokens = candidate.split(/\s+/);
-    while (tokens.length > 0 && INTERJECTIONS.has(tokens[0].toLowerCase())) {
+    while (tokens.length > 0) {
+      const head = tokens[0].toLowerCase().replace(/'s$/, '');
+      if (!INTERJECTIONS.has(head) && !LEADING_NOISE.has(head)) break;
       tokens = tokens.slice(1);
     }
     if (tokens.length === 0) continue;
+    // A possessive only survives when it qualifies a following capitalised
+    // word: "Charlotte's Web" is a title, "Melanie's" alone is a reference.
+    if (tokens.length === 1) tokens[0] = tokens[0].replace(/'s$/, '');
     const trimmed = tokens.join(' ');
     if (trimmed.length < 2) continue;
     // Skip label prefixes commonly used in structured text

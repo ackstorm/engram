@@ -45,3 +45,42 @@ describe('extract — conversational noise', () => {
     expect(entities).toContain('Acme');
   });
 });
+
+// ============================================================
+// Possessives and sentence-opening verbs
+// ============================================================
+//
+// Same root cause as the interjection bug: the extractor reads a capitalised
+// run and cannot tell a proper noun from a word that is capitalised only
+// because it opens an utterance. Two further shapes, both general to any
+// prose:
+//   - "Charlotte's Web" was split into "Charlotte" and "Web" because the
+//     capitalised-run pattern has no apostrophe in it. That title is a gold
+//     answer in the LoCoMo benchmark, so the entity was unreachable.
+//   - "Seeing Mel again" yielded the entity "Seeing Mel", gluing a gerund to
+//     a real name and fragmenting that person's memories further.
+
+describe('extract — possessives and sentence-opening verbs', () => {
+  it("keeps a possessive title as one entity", () => {
+    const { entities } = extract("[d] Melanie: I finished Charlotte's Web with the kids");
+    expect(entities).toContain("Charlotte's Web");
+    expect(entities).not.toContain('Web');
+  });
+
+  it("strips a trailing possessive when it is not part of a title", () => {
+    const { entities } = extract("[d] Caroline: Melanie's son loves dinosaurs");
+    expect(entities).toContain('Melanie');
+    expect(entities).not.toContain("Melanie's");
+  });
+
+  it('does not glue a sentence-opening verb to a name', () => {
+    const { entities } = extract('[d] Caroline: Seeing Mel again was great.');
+    expect(entities).toContain('Mel');
+    expect(entities).not.toContain('Seeing Mel');
+  });
+
+  it('does not treat a subordinating conjunction as part of an entity', () => {
+    const { entities } = extract('[d] Caroline: Since July we talk more.');
+    expect(entities).not.toContain('Since July');
+  });
+});
